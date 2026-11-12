@@ -17,7 +17,7 @@ export function Preparation({ event, update, notify }) {
   const [editing, setEditing] = useState(false);
   const completed = event.tasks.filter(task => task.done).length;
   return <>
-    <PageHead title="筹备与资源" description="倒排任务、跟进负责人，并查看场地、设备和预算。">
+    <PageHead heading="h2" title="筹备与协作" description="倒排任务、跟进负责人，并查看场地、设备和预算。">
       {tab === '筹备任务' && <button className="button primary" aria-haspopup="dialog" onClick={() => setEditing(true)}><Plus size={18} />新建任务</button>}
     </PageHead>
     <Tabs label="筹备视图" items={['筹备任务', '设备与物料', '预算与报价']} value={tab} onChange={setTab} />
@@ -60,7 +60,7 @@ const shifts = ['入场签到 08:30–09:30', '分场引导 13:00–15:00', '撤
 
 export function External({ event }) {
   return <>
-    <PageHead title="外部协作" description="查看嘉宾、供应商与志愿者的提交，打开本机表单演练。" />
+    <PageHead heading="h3" title="外部协作" description="查看嘉宾、供应商与志愿者的提交，打开本机表单演练。" />
     <div className="role-grid">{Object.entries(externalRoles).map(([role, label]) => <Panel key={role}>
       <div className="file-title"><IconTile icon={UsersRound} /><h2>{label}</h2></div>
       <p className="muted">{roleDescriptions[role]}</p>

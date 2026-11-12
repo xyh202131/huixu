@@ -44,7 +44,8 @@ export function ProjectMemory({ eventId, importFiles, importRun, evidenceId, onC
   }
 
   useEffect(() => {
-    if (evidenceId) show({ view: 'excerpt', chunk: evidenceId }, setPreview);
+    setPreview(current => current?.linked ? null : current);
+    if (evidenceId) show({ view: 'excerpt', chunk: evidenceId }, result => setPreview({ ...result, linked: true }));
     return () => action.current?.abort();
   }, [eventId, evidenceId]);
 

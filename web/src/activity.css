@@ -1,0 +1,111 @@
+.activity-shell { --activity-width: 1160px; --activity-header: 70px; min-height: 100vh; }
+.activity-topbar {
+  position: sticky; top: 0; z-index: 4;
+  background: var(--white); border-bottom: 1px solid var(--border);
+}
+.activity-toolbar {
+  display: flex; justify-content: space-between; align-items: center; gap: 16px;
+  width: min(calc(100% - 48px), var(--activity-width)); min-height: var(--activity-header); margin-inline: auto;
+}
+.activity-toolbar-context, .activity-toolbar-actions { display: flex; align-items: center; gap: 10px; min-width: 0; }
+.activity-toolbar-context { flex: 1; gap: 16px; }
+.activity-toolbar-actions { flex-shrink: 0; }
+.activity-toolbar-context .select-field { width: min(100%, 238px); margin: 0; }
+.activity-brand {
+  display: inline-flex; align-items: center; gap: 8px; flex-shrink: 0;
+  padding: 0; border: 0; background: transparent; font-size: 22px; font-weight: 780; letter-spacing: -.045em;
+}
+.activity-brand svg { color: var(--accent); }
+.activity-toolbar .button { padding-inline: 12px; min-height: 42px; }
+.activity-account { flex-shrink: 0; border-color: transparent; padding: 0; }
+.activity-account .avatar { width: 34px; height: 34px; }
+.activity-topbar .tooltip { inset: 100% 0 auto auto; }
+.directory-location {
+  padding-inline-start: 8px; border-inline-start: 1px solid var(--border); color: var(--muted);
+  font-size: 13px; font-weight: 550;
+}
+.directory-trigger > svg:last-child { transition: rotate var(--motion-layer) var(--ease-out); }
+.directory-trigger[aria-expanded='true'] > svg:last-child { rotate: 180deg; }
+.chapter-directory {
+  position: fixed; inset: var(--directory-top, 72px) var(--directory-right, 14px) auto auto; margin: 0;
+  width: 228px; max-height: min(480px, 70dvh); padding: 6px; overflow: auto;
+  border: 1px solid var(--border); border-radius: 14px; background: var(--white); color: var(--ink);
+  box-shadow: var(--layer-shadow);
+}
+.chapter-directory:popover-open { animation: directory-enter var(--motion-layer) var(--ease-out) both; }
+.chapter-directory a {
+  display: flex; align-items: center; gap: 11px; min-height: 44px; padding: 8px 10px;
+  border-radius: 8px; color: var(--ink); font-weight: 560;
+}
+.chapter-directory a:hover { background: var(--surface-hover); }
+.chapter-directory a[aria-current='location'] { background: var(--accent-soft); color: var(--accent); font-weight: 700; }
+.chapter-directory a:focus-visible { outline-offset: -3px; }
+.chapter-directory .directory-subsection { min-height: 35px; padding-inline-start: 39px; font-size: 14px; color: var(--muted); }
+@keyframes directory-enter {
+  from { opacity: 0; transform: translateY(var(--directory-enter-y, -5px)); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+.activity-workspace {
+  display: block; width: min(calc(100% - 48px), var(--activity-width)); margin-inline: auto;
+  padding: 24px 0 56px;
+}
+.activity-chapter, .activity-subsection { display: grid; gap: 14px; min-width: 0; }
+.activity-chapter > *, .activity-subsection > * { min-width: 0; }
+.activity-chapter + .activity-chapter { margin-top: 36px; padding-top: 24px; border-top: 1px solid var(--border); }
+.activity-subsection { margin-top: 14px; padding-top: 17px; border-top: 1px solid var(--border); }
+.activity-chapter, .activity-subsection, .activity-anchor { scroll-margin-top: calc(var(--activity-header) + 13px); }
+.activity-workspace .page-head { min-height: 0; margin-bottom: 2px; }
+.activity-workspace .page-head :is(h2, h3) { margin-bottom: 5px; font-weight: 750; line-height: 1.22; letter-spacing: -.025em; }
+.activity-workspace .page-head h2 { font-size: clamp(24px, 3vw, 31px); }
+.activity-workspace .page-head h3 { font-size: 22px; }
+.activity-file-history {
+  padding: 11px 15px; border: 1px solid var(--border); border-radius: var(--radius); background: var(--white);
+}
+.activity-file-history > summary { cursor: pointer; min-height: 32px; font-weight: 650; }
+.activity-file-history[open] > summary { margin-bottom: 8px; }
+
+.activity-workspace .overview-event {
+  align-items: flex-end; flex-wrap: wrap; gap: 17px; min-height: 164px; padding: 22px 25px;
+}
+.overview-event-status { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin-bottom: 9px; color: var(--accent); font-size: 13px; font-weight: 620; }
+.overview-event h1 { margin-bottom: 8px; font-size: clamp(28px, 4vw, 42px); line-height: 1.13; letter-spacing: -.036em; overflow-wrap: anywhere; }
+.overview-event-actions { display: flex; flex-wrap: wrap; gap: 7px; align-items: center; }
+.overview-event-actions .button { padding-inline: 10px; }
+.activity-pending .panel-head { margin-bottom: 6px; }
+.activity-pending .action-list button { min-height: 58px; }
+
+@media (min-width: 1150px) {
+  body:has(.dialog.drawer[open]) .activity-workspace {
+    width: min(calc(100% - var(--drawer-width) - 48px), var(--activity-width));
+    margin-inline: max(20px, calc((100% - var(--activity-width) - var(--drawer-width)) / 2)) auto;
+  }
+}
+@media (max-width: 760px) {
+  .activity-shell { --activity-header: 58px; }
+  .activity-toolbar { width: calc(100% - 24px); gap: 5px; }
+  .activity-toolbar-context, .activity-toolbar-actions { gap: 4px; }
+  .activity-toolbar-context .compact-select .select-trigger { min-height: 40px; padding-inline: 7px; font-size: 13px; }
+  .activity-brand span, .directory-location, .toolbar-action > span { display: none; }
+  .activity-brand svg { width: 21px; }
+  .activity-toolbar .button { min-height: 40px; padding-inline: 8px; gap: 4px; }
+  .activity-toolbar .toolbar-action { width: 38px; padding-inline: 0; }
+  .activity-toolbar .activity-account { width: 38px; min-height: 40px; }
+  .directory-trigger > svg { display: none; }
+  .chapter-directory {
+    --directory-enter-y: 12px;
+    inset: auto 0 0; width: 100%; max-width: none; max-height: 73dvh;
+    padding: 10px 12px max(12px, env(safe-area-inset-bottom)); border-radius: 17px 17px 0 0;
+  }
+  .chapter-directory a { min-height: 46px; }
+  .activity-workspace { width: calc(100% - 24px); padding: 14px 0 32px; }
+  .activity-chapter, .activity-subsection { gap: 11px; }
+  .activity-chapter + .activity-chapter { margin-top: 24px; padding-top: 17px; }
+  .activity-workspace .overview-event { min-height: 0; padding: 15px 13px; gap: 13px; }
+  .activity-workspace .overview-event-copy { flex-basis: 100%; }
+  .overview-event-actions .button { min-height: 36px; font-size: 13px; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .chapter-directory:popover-open { animation: none; }
+  .directory-trigger > svg:last-child { transition: none; }
+}

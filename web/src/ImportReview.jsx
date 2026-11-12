@@ -15,7 +15,7 @@ function Evidence({ evidence, navigate }) {
   return <>
     <p className="import-evidence-location"><FileText size={16} aria-hidden="true" /><span>{evidence.name} · v{evidence.revision} · {evidence.location}</span></p>
     <blockquote>{evidence.excerpt}</blockquote>
-    <button type="button" className="link-button" onClick={() => navigate('sources/' + evidence.chunkId)}>查看完整片段</button>
+    <button type="button" className="link-button" onClick={() => navigate('sources/' + evidence.chunkId, { preserveScroll: true })}>查看完整片段</button>
   </>;
 }
 
@@ -82,7 +82,7 @@ export function ImportReview({ event, update, notify, navigate, organize, organi
       const draft = { ...planFromReview(latest.review, latestChoices), id: uid(), revision: latest.review.revision };
       update(current => ({ ...current, organizedPlan: draft }));
       notify('已生成可编辑的方案草稿');
-      navigate('schedule');
+      navigate('schedule/plan');
     } catch (error) {
       setProblem(error.message);
     } finally {
@@ -138,7 +138,7 @@ export function ImportReview({ event, update, notify, navigate, organize, organi
                 {facts.map(fact => <div key={fact.key}><dt>{factLabel(fact)}</dt>
                   {fact.options.map(option => <dd key={option.value}>{option.value} <span className="import-evidence-links">
                     {option.evidence.map(evidence => <button type="button" key={evidence.chunkId} className="link-button"
-                      onClick={() => navigate('sources/' + evidence.chunkId)}>{evidence.name} · {evidence.location}</button>)}
+                      onClick={() => navigate('sources/' + evidence.chunkId, { preserveScroll: true })}>{evidence.name} · {evidence.location}</button>)}
                   </span></dd>)}
                 </div>)}
               </dl></section>;
@@ -146,7 +146,7 @@ export function ImportReview({ event, update, notify, navigate, organize, organi
           </details>
           <div className="import-review-footer">
             {unresolved.length > 0 && <p className="muted">确认全部冲突后可以生成方案。</p>}
-            {event.organizedPlan && <button type="button" className="button" onClick={() => navigate('schedule')}>打开现有草稿</button>}
+            {event.organizedPlan && <button type="button" className="button" onClick={() => navigate('schedule/plan')}>打开现有草稿</button>}
             {event.organizedPlan && !generating && unresolved.length === 0 ?
               <Popconfirm label="用整理结果替换草稿" confirmLabel="确认替换" description="替换后，现有草稿的手工修改会被覆盖。"
                 className="button primary" onConfirm={generate} /> :

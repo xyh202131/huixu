@@ -2,6 +2,7 @@ import { useEffect, useId, useRef, useState } from 'react';
 import { ArrowLeft, ArrowRight, CalendarDays, Download, ExternalLink, MapPin, QrCode, Search, Send } from 'lucide-react';
 import { Badge, Empty, PageHead, Panel, Table, Tabs } from './components';
 import { CheckControl, Dialog, Notice, Popconfirm } from './interactions';
+import { MarbleFlow } from './MarbleFlow';
 import { Select } from './Select';
 import { channels, dateLabel, materialKinds, materialText, participantCount, roomLabel, timeRange, uid } from './model';
 
@@ -52,7 +53,7 @@ export function Registration({ event, update, notify }) {
     });
   }
   return <>
-    <PageHead title="报名与票务" description="查看公开页、报名审核、分场名额和候补。">
+    <PageHead heading="h2" title="报名与发布" description="查看公开页、报名审核、分场名额和候补。">
       <button className="button" aria-haspopup="dialog" onClick={() => { setQr(''); setShowQr(true); }}><QrCode size={18} />报名二维码</button>
       <a className="button primary" href={publicPath}><ExternalLink size={17} />预览活动页</a>
     </PageHead>
@@ -116,11 +117,13 @@ export function PublicEvent({ event, update }) {
     <main className="public-event-inner public-event-content">
       <section className="public-hero" aria-labelledby="public-event-title">
         <div className="public-hero-media">
+          <MarbleFlow variant="spectrum" />
           {event.type === '行业论坛'
             ? <div className="public-hero-photo"><img src="/conference.png" alt="" /></div>
             : <div className="public-hero-placeholder"><span>{event.type}</span></div>}
         </div>
         <div className="public-hero-copy">
+          <MarbleFlow strength={0.8} />
           <h1 id="public-event-title">{event.title}</h1>
           <ul className="public-event-meta">
             <li><CalendarDays size={19} aria-hidden="true" />{dateLabel(event.date)}</li>
@@ -184,7 +187,7 @@ export function Materials({ event, update, notify }) {
     setPreviewNeedsUpdate(false);
   }
   return <>
-    <PageHead title="材料与沟通" description="从同一版计划生成材料，核对人群和渠道后记录演练发送。">
+    <PageHead heading="h3" title="材料与沟通" description="从同一版计划生成材料，核对人群和渠道后记录演练发送。">
       <Badge tone={event.version ? 'success' : 'neutral'}>{event.version ? '发布版本 v' + event.version : '计划草稿'}</Badge>
     </PageHead>
     <Tabs label="材料类型" items={materialKinds} value={kind} onChange={value => { setKind(value); markPreviewStale(); }} />
