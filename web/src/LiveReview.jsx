@@ -5,21 +5,21 @@ import { Dialog, MetricValue, Notice } from './interactions';
 import { Select } from './Select';
 import { incidentChange, incidentKinds, materialText, money, participantCount, roomLabel, timeRange, uid } from './model';
 
-export function Live({ event, update, openChange }) {
+export function Live({ event, readOnly, mobile, update, openChange }) {
   const [board, setBoard] = useState(false);
   const [report, setReport] = useState(false);
   const [scanResult, setScanResult] = useState(null);
-  const [progressWarning, setProgressWarning] = useState('');
+  const [progressWarning, setProgressWarning] = useState(null);
   const [scanSession, setScanSession] = useState('');
   const sessions = [...event.agenda].sort((a, b) => a.start.localeCompare(b.start));
   const current = sessions.find(item => event.actual[item.id]?.started && !event.actual[item.id]?.ended);
   const next = sessions.find(item => !event.actual[item.id]?.started);
   function mark(session, action) {
     if (action === 'started' && current) {
-      setProgressWarning('请先结束正在进行的环节，再记录下一场开始。');
+      setProgressWarning({ sessionId: session.id, message: '请先结束正在进行的环节，再记录下一场开始。' });
       return;
     }
-    setProgressWarning('');
+    setProgressWarning(null);
     const stamp = new Date().toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit', hour12: false });
     update(previous => ({ ...previous, onsite: true, actual: {
       ...previous.actual, [session.id]: { ...previous.actual[session.id], [action]: stamp },
@@ -40,10 +40,25 @@ export function Live({ event, update, openChange }) {
     e.currentTarget.reset();
   }
   const entranceCount = event.checkins.filter(item => !item.sessionId).length;
+  const runbookRows = sessions.map(item => {
+    const actual = event.actual[item.id];
+    const progress = actual?.started ? actual.started + (actual.ended ? '–' + actual.ended : ' 开始') : '待开始';
+    const location = roomLabel(item.room) + ' · 签到 / 引导';
+    const action = actual?.ended ? <Badge tone="success">已结束</Badge> : <button className="button small" onClick={() => mark(item, actual?.started ? 'ended' : 'started')}>
+      {actual?.started ? '记录结束' : '记录开始'}</button>;
+    if (mobile) return <li key={item.id} className="live-runbook-card">
+      <div className="live-runbook-heading"><strong>{item.title}</strong><span className="tabular muted">{timeRange(item)}</span></div>
+      <p className="muted">{location}</p>
+      <div className="live-runbook-progress"><span>{progress}</span>{!readOnly && action}</div>
+      {progressWarning?.sessionId === item.id && <Notice tone="warning" announce>{progressWarning.message}</Notice>}
+    </li>;
+    return <tr key={item.id}><td>{timeRange(item)}</td><td>{item.title}</td><td>{location}</td><td>{progress}</td>
+      {!readOnly && <td>{action}</td>}</tr>;
+  });
   return <>
-    <PageHead heading="h2" title="现场执行" description="查看现场进度、核验观众凭证，或上报异常并生成调整方案。">
+    <PageHead heading="h2" title="现场执行" description={readOnly ? '查看入场统计、当前进度和执行台本。' : '查看现场进度、核验观众凭证，或上报异常并生成调整方案。'}>
       <button className="button" aria-haspopup="dialog" onClick={() => setBoard(true)}><Monitor size={17} />现场大屏</button>
-      <button className="button primary" aria-haspopup="dialog" onClick={() => setReport(true)}><AlertTriangle size={17} />上报问题</button>
+      {!readOnly && <button className="button primary" aria-haspopup="dialog" onClick={() => setReport(true)}><AlertTriangle size={17} />上报问题</button>}
     </PageHead>
     <div className="split"><Panel title="现场进度" action={<Badge tone="success">{event.version ? '议程 v' + event.version : '计划草稿'}</Badge>}>
       <div className="running"><IconTile icon={ClipboardCheck} /><div><span>当前环节</span><strong>{current?.title ?? '暂无进行中的环节'}</strong>
@@ -51,23 +66,20 @@ export function Live({ event, update, openChange }) {
       <div className="running"><IconTile icon={Monitor} tone="blue" /><div><span>下一环节</span><strong>{next?.title ?? '活动结束'}</strong>
         {next && <small>{timeRange(next)} · {roomLabel(next.room)}</small>}</div></div>
     </Panel><Panel title="观众签到" action={<Badge tone="success">入场&nbsp;<MetricValue value={entranceCount} compact />&nbsp;人</Badge>}>
-      <form className="form-stack" onSubmit={checkIn}>
+      {!readOnly && <form className="form-stack" onSubmit={checkIn}>
         <Select label="签到点" value={scanSession} onChange={value => { setScanSession(value); setScanResult(null); }}
           options={[{ value: '', label: '活动入场' }, ...sessions.map(item => ({ value: item.id, label: roomLabel(item.room) + ' · ' + item.title }))]} />
-        <label>个人凭证<input name="code" placeholder={event.isSample ? '演练凭证 G001' : '输入已确认观众的凭证'} required /></label>
+        <label>个人凭证<input name="code" autoCapitalize="characters" autoComplete="off" spellCheck={false}
+          placeholder={event.isSample ? '演练凭证 G001' : '输入已确认观众的凭证'} required /></label>
         <button className="button primary"><ScanLine size={17} />核验并签到</button>
         {scanResult && <Notice tone={scanResult.tone} announce>{scanResult.text}</Notice>}
-      </form>
+      </form>}
     </Panel></div>
     <Panel title="执行台本">
-      {progressWarning && <Notice tone="warning" announce>{progressWarning}</Notice>}
-      <Table headers={['计划时间', '环节', '地点与岗位', '实绩', '操作']}>{sessions.map(item => {
-        const actual = event.actual[item.id];
-        return <tr key={item.id}><td>{timeRange(item)}</td><td>{item.title}</td><td>{roomLabel(item.room)} · 签到 / 引导</td>
-          <td>{actual?.started ? actual.started + (actual.ended ? '–' + actual.ended : ' 开始') : '待开始'}</td>
-          <td>{actual?.ended ? <Badge tone="success">已结束</Badge> : <button className="button small" onClick={() => mark(item, actual?.started ? 'ended' : 'started')}>
-            {actual?.started ? '记录结束' : '记录开始'}</button>}</td></tr>;
-      })}</Table>
+      {mobile ? <ul className="live-runbook-list">{runbookRows}</ul> : <>
+        {progressWarning && <Notice tone="warning" announce>{progressWarning.message}</Notice>}
+        <Table headers={['计划时间', '环节', '地点与岗位', '实绩', ...(readOnly ? [] : ['操作'])]}>{runbookRows}</Table>
+      </>}
     </Panel>
     {board && <Dialog title="现场大屏预览" close={() => setBoard(false)}>
       <div className="board"><h3>{event.title}</h3><p>当前 · {current?.title ?? '待开始'}</p><p>下一场 · {next ? next.title + ' · ' + roomLabel(next.room) + ' · ' + next.start : '无'}</p>
@@ -90,7 +102,7 @@ export function Live({ event, update, openChange }) {
   </>;
 }
 
-export function Review({ event, copy, update, notify }) {
+export function Review({ event, readOnly, copy, update, notify }) {
   const [preview, setPreview] = useState('');
   const total = participantCount(event);
   const checked = event.checkins.filter(item => !item.sessionId).length;
@@ -98,7 +110,7 @@ export function Review({ event, copy, update, notify }) {
   const cards = [['确认报名', total + ' 人'], ['实际入场', checked + ' 人'], ['入场率', total ? Math.round(checked * 100 / total) + '%' : '—'], ['预算 / 实支', money(event.budget) + ' / ' + money(spending)]];
   return <>
     <PageHead heading="h2" title="复盘与模板" description="回顾报名、到场、预算和执行情况，复用活动安排。">
-      <button className="button primary" onClick={copy}>复制为新活动</button>
+      {!readOnly && <button className="button primary" onClick={copy}>复制为新活动</button>}
     </PageHead>
     <div className="metrics">{cards.map(([label, value]) => <div className="metric" key={label}><div><strong>{label}</strong><MetricValue value={value} /></div></div>)}</div>
     <Panel title="计划与实绩"><Table headers={['环节', '计划时间', '实际开始', '实际结束', '分场签到']}>{event.agenda.map(item => <tr key={item.id}>
@@ -110,7 +122,7 @@ export function Review({ event, copy, update, notify }) {
     </Panel><Panel title="发布复盘">
       {event.history.length ? <ul className="plain-list">{event.history.map(item => <li key={item.id}>{item.title} · v{item.version} · {item.count} 人受影响</li>)}</ul> : <Empty>暂无发布记录。</Empty>}
     </Panel></div>
-    {preview && <Dialog title={preview} variant="drawer" close={() => setPreview('')} footer={
+    {preview && <Dialog title={preview} variant="drawer" close={() => setPreview('')} footer={!readOnly &&
       <button className="button primary" disabled={!total} onClick={() => {
         const message = { id: uid(), subject: preview, channel: '演练通知', count: total, version: event.version };
         update(previous => ({ ...previous, messages: [message, ...previous.messages] }));

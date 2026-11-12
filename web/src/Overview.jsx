@@ -4,7 +4,7 @@ import { MetricValue } from './interactions';
 import { MarbleFlow } from './MarbleFlow';
 import { dateLabel, participantCount } from './model';
 
-export function Overview({ event, navigate, openImport }) {
+export function Overview({ event, readOnly, navigate, openImport }) {
   const completed = event.tasks.filter(task => task.done).length;
   const openIssues = event.issues.filter(issue => !issue.resolved);
   const stats = [
@@ -14,7 +14,7 @@ export function Overview({ event, navigate, openImport }) {
     [ArrowRightLeft, 'purple', '待发布变更', Number(Boolean(event.change)), '待评估并发布的变更', 'change'],
   ];
   const pending = [
-    ...openIssues.map(issue => [CalendarX2, 'rose', issue.title, '对照原文并确认采用的安排。', 'sources/issue/' + issue.id]),
+    ...openIssues.map(issue => [CalendarX2, 'rose', issue.title, readOnly ? '查看两份资料的原文差异。' : '对照原文并确认采用的安排。', 'sources/issue/' + issue.id]),
     ...(event.change ? [[ArrowRightLeft, 'success', '确认' + event.change.title + '方案', event.change.reason + '，查看候选方案及发布影响。', 'change']] : []),
     ...(event.isSample && !event.replies.some(reply => reply.role === 'guest') ? [[FileText, 'blue', '嘉宾课件待提交', '查看嘉宾确认与课件提交情况。', 'external']] : []),
   ];
@@ -23,6 +23,7 @@ export function Overview({ event, navigate, openImport }) {
       <MarbleFlow />
       <div className="overview-event-copy">
         <div className="overview-event-status"><CalendarDays size={16} aria-hidden="true" /><span>{event.type}</span>
+          {readOnly && <Badge tone="neutral">示例活动</Badge>}
           <Badge tone="success">{event.onsite ? '进行中' : '筹备中'}</Badge></div>
         <h1>{event.title}</h1>
         <div className="overview-event-meta">
@@ -31,7 +32,7 @@ export function Overview({ event, navigate, openImport }) {
         </div>
       </div>
       <div className="overview-event-actions">
-        <button type="button" className="button" onClick={openImport}><UploadCloud size={17} aria-hidden="true" />导入活动项目</button>
+        {!readOnly && <button type="button" className="button" onClick={openImport}><UploadCloud size={17} aria-hidden="true" />导入活动项目</button>}
         <button type="button" className="button" onClick={() => navigate('live')}><Monitor size={17} aria-hidden="true" />现场模式</button>
         <button type="button" className="button primary" onClick={() => navigate('schedule')}>查看议程<ArrowRight size={16} aria-hidden="true" /></button>
       </div>

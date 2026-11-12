@@ -1,7 +1,7 @@
 import { activityTypes, checkCandidate, moveCandidate } from '../src/model.js';
 import { isArchiveName } from '../src/sourceFormats.js';
 import { isLocalRequest, readBody, sendJson as send } from './localApi.js';
-import { readModelConfig, requestModel, toolMessages } from './modelProvider.js';
+import { requestModel, toolMessages } from './modelProvider.js';
 
 const system = `你是会序活动工作台的助手，用简体中文纯文本直接回答。内部 ID 只用于工具参数。将字母会场编号按工作台写为「A 厅」「B 厅」等。
 当前议程用 read_agenda。筹备、预算、报名、现场或发布状态用 read_event_status。问资料、场地手册、历史经验或原文时用 search_project_memory，目录用 list_project_sources。
@@ -160,16 +160,13 @@ async function runModel(config, question, event, memory, signal) {
   return { status: 502, error: '模型没有返回可显示的结果，请重试。' };
 }
 
-export function createAgentHandler(env, memory) {
-  const config = readModelConfig(env);
-
+export function createAgentHandler(getModelConfig, memory) {
   let active = 0;
   return async (request, response) => {
     if (request.method !== 'POST') return send(response, 405, { error: '此接口仅接受 POST。' });
     if (!isLocalRequest(request)) {
       return send(response, 403, { error: 'Agent 演练接口只允许本机工作台访问。' });
     }
-    if (!config) return send(response, 503, { code: 'MODEL_NOT_CONFIGURED', error: '尚未配置会序的模型端点。请配置服务端后重启工作台。' });
     if (request.headers['content-type']?.split(';')[0] !== 'application/json') return send(response, 415, { error: '请求必须是 JSON。' });
     if (active >= 2) return send(response, 429, { error: 'Agent 正在处理请求，请稍后重试。' });
 
@@ -177,6 +174,8 @@ export function createAgentHandler(env, memory) {
     const disconnect = new AbortController();
     response.on('close', () => disconnect.abort());
     try {
+      const config = getModelConfig();
+      if (!config) return send(response, 503, { code: 'MODEL_NOT_CONFIGURED', error: '尚未配置模型。可在工作台右上角的模型设置中添加。' });
       const body = await readBody(request, 256 * 1024);
       if (!body) return send(response, 413, { error: '活动摘要过大。' });
       let input;

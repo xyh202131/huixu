@@ -12,21 +12,21 @@ function taskDeadline(date, offset) {
   return deadline.toISOString().slice(0, 10);
 }
 
-export function Preparation({ event, update, notify }) {
+export function Preparation({ event, readOnly, update, notify }) {
   const [tab, setTab] = useState('筹备任务');
   const [editing, setEditing] = useState(false);
   const completed = event.tasks.filter(task => task.done).length;
   return <>
     <PageHead heading="h2" title="筹备与协作" description="倒排任务、跟进负责人，并查看场地、设备和预算。">
-      {tab === '筹备任务' && <button className="button primary" aria-haspopup="dialog" onClick={() => setEditing(true)}><Plus size={18} />新建任务</button>}
+      {!readOnly && tab === '筹备任务' && <button className="button primary" aria-haspopup="dialog" onClick={() => setEditing(true)}><Plus size={18} />新建任务</button>}
     </PageHead>
     <Tabs label="筹备视图" items={['筹备任务', '设备与物料', '预算与报价']} value={tab} onChange={setTab} />
     {tab === '筹备任务' && <Panel title="筹备任务" action={<Badge tone="success"><MetricValue value={completed} compact />&nbsp;/ {event.tasks.length} 已完成</Badge>}>
       <Table headers={['任务', '负责人', '截止时间', '状态']}>{event.tasks.map(task => <tr key={task.id}>
         <td>{task.name}</td><td>{task.owner}</td><td>{taskDeadline(event.date, task.offset)}</td>
-        <td><CheckControl label={task.name + '完成状态'} description={task.done ? '已完成' : '标记完成'} checked={task.done} onChange={done =>
+        <td>{readOnly ? <Badge tone={task.done ? 'success' : 'neutral'}>{task.done ? '已完成' : '待处理'}</Badge> : <CheckControl label={task.name + '完成状态'} description={task.done ? '已完成' : '标记完成'} checked={task.done} onChange={done =>
           update(current => ({ ...current, tasks: current.tasks.map(item => item.id === task.id ? { ...item, done } : item) }))
-        } /></td>
+        } />}</td>
       </tr>)}</Table>
     </Panel>}
     {tab === '设备与物料' && <Panel title="场地与设备">
@@ -58,13 +58,13 @@ export function Preparation({ event, update, notify }) {
 const roleDescriptions = { guest: '确认时段并登记课件', vendor: '提交报价与交付说明', volunteer: '查看并认领岗位班次' };
 const shifts = ['入场签到 08:30–09:30', '分场引导 13:00–15:00', '撤场交接 17:00–18:00'];
 
-export function External({ event }) {
+export function External({ event, readOnly }) {
   return <>
-    <PageHead heading="h3" title="外部协作" description="查看嘉宾、供应商与志愿者的提交，打开本机表单演练。" />
+    <PageHead heading="h3" title="外部协作" description={readOnly ? '查看嘉宾、供应商与志愿者的协作事项。' : '查看嘉宾、供应商与志愿者的提交，打开本机表单演练。'} />
     <div className="role-grid">{Object.entries(externalRoles).map(([role, label]) => <Panel key={role}>
       <div className="file-title"><IconTile icon={UsersRound} /><h2>{label}</h2></div>
       <p className="muted">{roleDescriptions[role]}</p>
-      <a className="button" href={'#/external/' + event.id + '/' + role}><Link2 size={17} />打开{label}表单</a>
+      {!readOnly && <a className="button" href={'#/external/' + event.id + '/' + role}><Link2 size={17} />打开{label}表单</a>}
     </Panel>)}</div>
     <Panel title="提交记录">
       {event.replies.length ? <Table headers={['角色', '姓名或机构', '提交内容', '状态']}>{event.replies.map(reply => <tr key={reply.id}>

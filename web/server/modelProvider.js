@@ -1,14 +1,24 @@
-export function readModelConfig(env) {
-  const protocol = env.HUIXU_LLM_PROTOCOL || 'openai';
-  if (!['openai', 'anthropic'].includes(protocol) || !env.HUIXU_LLM_MODEL) return null;
+export function modelEndpoint(protocol, baseUrl) {
+  if (!['openai', 'anthropic'].includes(protocol)) return null;
   let url;
-  try { url = new URL(env.HUIXU_LLM_BASE_URL); } catch { return null; }
+  try { url = new URL(baseUrl); } catch { return null; }
   const loopback = ['localhost', '127.0.0.1', '[::1]'].includes(url.hostname);
   if ((url.protocol !== 'https:' && !(loopback && url.protocol === 'http:')) || url.username || url.password || url.search || url.hash) return null;
 
   const basePath = url.pathname.replace(/\/+$/, '');
-  if (protocol === 'anthropic') url.pathname = basePath.endsWith('/v1') ? `${basePath}/messages` : `${basePath}/v1/messages`;
-  else url.pathname = `${basePath}/chat/completions`;
+  if (protocol === 'anthropic') {
+    if (basePath.endsWith('/messages')) url.pathname = basePath;
+    else url.pathname = basePath.endsWith('/v1') ? `${basePath}/messages` : `${basePath}/v1/messages`;
+  } else {
+    url.pathname = basePath.endsWith('/chat/completions') ? basePath : `${basePath}/chat/completions`;
+  }
+  return url;
+}
+
+export function readModelConfig(env) {
+  const protocol = env.HUIXU_LLM_PROTOCOL || 'openai';
+  const url = modelEndpoint(protocol, env.HUIXU_LLM_BASE_URL);
+  if (!url || !env.HUIXU_LLM_MODEL) return null;
   return { protocol, url, model: env.HUIXU_LLM_MODEL, key: env.HUIXU_LLM_API_KEY };
 }
 
@@ -32,13 +42,16 @@ export async function requestModel(config, { system, messages, tools, final, sig
     })) }),
   } : {
     model: config.model, messages: [{ role: 'system', content: system }, ...messages], tools, tool_choice: final ? 'none' : 'auto',
+    ...(config.thinking && { thinking: config.thinking }),
   };
+  const keyHeader = config.keyHeader === 'x-api-key' ? 'x-api-key' : 'Authorization';
+  const keyValue = keyHeader === 'x-api-key' ? config.key : `Bearer ${config.key}`;
   const response = await fetch(config.url, {
     method: 'POST', signal, redirect: 'error',
     headers: {
       'Content-Type': 'application/json',
       ...(anthropic && { 'anthropic-version': '2023-06-01' }),
-      ...(config.key && { Authorization: `Bearer ${config.key}` }),
+      ...(config.key && { [keyHeader]: keyValue }),
     },
     body: JSON.stringify(body),
   });
@@ -60,7 +73,8 @@ export async function requestModel(config, { system, messages, tools, final, sig
   return {
     answer: message.content,
     calls: (message.tool_calls ?? []).map(call => ({ id: call?.id, name: call?.function?.name, args: parseArguments(call?.function?.arguments) })),
-    assistant: { role: 'assistant', content: message.content ?? null, tool_calls: message.tool_calls },
+    assistant: { role: 'assistant', content: message.content ?? null, tool_calls: message.tool_calls,
+      ...(typeof message.reasoning_content === 'string' && { reasoning_content: message.reasoning_content }) },
     model: data.model,
   };
 }

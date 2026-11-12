@@ -1,6 +1,6 @@
 :root {
-  --motion-quick: 140ms;
-  --motion-layer: 220ms;
+  --motion-quick: 100ms;
+  --motion-layer: 160ms;
   --ease-out: cubic-bezier(.22, .68, .3, 1);
   --ease-spring: cubic-bezier(.25, 1.45, .52, 1);
   --layer-shadow: 0 16px 50px #222c4b24, 0 3px 10px #222c4b0c;
@@ -9,7 +9,7 @@
 
 :is(.button, .icon-button, .link-button, button.metric, .action-list button, .selection-list button) {
   transition: background var(--motion-quick) ease, border-color var(--motion-quick) ease,
-    box-shadow var(--motion-quick) ease, scale 180ms var(--ease-spring);
+    box-shadow var(--motion-quick) ease, scale var(--motion-layer) var(--ease-spring);
 }
 :is(.button, .icon-button, .link-button, button.metric, .action-list button, .selection-list button):active:not(:disabled) { scale: .975; }
 .button.primary { position: relative; isolation: isolate; overflow: clip; }
@@ -17,7 +17,7 @@
   content: ''; position: absolute; inset: 0; pointer-events: none;
   background: radial-gradient(circle at var(--press-x, 50%) var(--press-y, 50%), #5265a62e, transparent 74%);
   opacity: 0; scale: .65; transform-origin: var(--press-x, 50%) var(--press-y, 50%);
-  transition: opacity 320ms ease-out, scale 320ms var(--ease-out);
+  transition: opacity 230ms ease-out, scale 230ms var(--ease-out);
 }
 .button.primary:active:not(:disabled)::after { opacity: 1; scale: 1; transition-duration: var(--motion-quick); }
 .form-stack :is(input, textarea, select), .search { transition: border-color var(--motion-quick) ease, box-shadow var(--motion-quick) ease; }
@@ -26,7 +26,7 @@
 .search input:focus-visible { outline: none; }
 .upload-zone, .room { transition: background var(--motion-quick) ease, border-color var(--motion-quick) ease; }
 .room.dragging { background: var(--accent-soft); border-color: var(--focus); }
-.radio-mark { transition: border-width 180ms var(--ease-spring), border-color var(--motion-quick) ease; }
+.radio-mark { transition: border-width var(--motion-layer) var(--ease-spring), border-color var(--motion-quick) ease; }
 
 .tabs-scroll { min-width: 0; max-width: 100%; overflow: auto; padding: 2px; }
 .tabs {
@@ -63,7 +63,7 @@
 .check-mark svg { width: 18px; height: 18px; }
 .check-mark path {
   fill: none; stroke: currentColor; stroke-linecap: round; stroke-linejoin: round; stroke-width: 2;
-  stroke-dasharray: 16; stroke-dashoffset: 16; transition: stroke-dashoffset 180ms var(--ease-out);
+  stroke-dasharray: 16; stroke-dashoffset: 16; transition: stroke-dashoffset var(--motion-layer) var(--ease-out);
 }
 .check-control input:checked + .check-mark path { stroke-dashoffset: 0; }
 .check-control.switch .check-mark { width: 44px; height: 24px; justify-items: start; padding-inline: 3px; border-radius: 20px; background: var(--surface-muted); }
@@ -74,7 +74,7 @@
 }
 .check-control.switch input:checked + .check-mark::before { translate: 20px 0; }
 .metric-value, .metric-inline { overflow: hidden; }
-.metric-value > span, .metric-inline > span { display: inline-block; animation: metric-enter 190ms var(--ease-out) both; }
+.metric-value > span, .metric-inline > span { display: inline-block; animation: metric-enter var(--motion-layer) var(--ease-out) both; }
 @keyframes metric-enter { from { opacity: .45; translate: 0 .55em; } }
 
 .notice { align-items: flex-start; border: 1px solid transparent; font-size: 14px; }
@@ -93,7 +93,7 @@ body:has(dialog:modal) { overflow: hidden; }
   box-shadow: var(--layer-shadow); overflow: hidden;
 }
 .dialog[open] { display: grid; grid-template-rows: auto minmax(0, 1fr) auto; animation: modal-enter var(--motion-layer) var(--ease-out) both; }
-.dialog::backdrop { background: var(--scrim); animation: backdrop-enter 170ms ease-out both; }
+.dialog::backdrop { background: var(--scrim); animation: backdrop-enter var(--motion-quick) ease-out both; }
 .dialog-head {
   display: flex; align-items: center; justify-content: space-between; gap: 12px;
   padding: 15px 20px; border-bottom: 1px solid var(--border);
@@ -178,7 +178,7 @@ body:has(dialog:modal) { overflow: hidden; }
   border: 1px solid var(--accent-border); border-radius: 11px; background: var(--white); color: var(--ink);
   box-shadow: var(--layer-shadow); overflow: auto; overscroll-behavior: contain;
   opacity: 0; translate: 0 -5px; scale: .98; transform-origin: top left; pointer-events: none;
-  transition: opacity 150ms ease, translate var(--motion-layer) var(--ease-out), scale var(--motion-layer) var(--ease-out),
+  transition: opacity var(--motion-quick) ease, translate var(--motion-layer) var(--ease-out), scale var(--motion-layer) var(--ease-out),
     display var(--motion-layer) allow-discrete, overlay var(--motion-layer) allow-discrete;
 }
 .select-options[data-side='top'] { translate: 0 5px; transform-origin: bottom left; }
@@ -205,7 +205,7 @@ body:has(dialog:modal) { overflow: hidden; }
   display: grid; grid-template-columns: auto minmax(0, 1fr) auto; align-items: center; gap: 9px;
   max-width: min(410px, calc(100vw - 36px)); padding: 9px 10px 9px 13px; border: 1px solid var(--accent-border);
   border-radius: 11px; background: var(--white); color: var(--accent); box-shadow: var(--layer-shadow);
-  font-size: 14px; line-height: 1.45; animation: modal-enter 180ms var(--ease-out) both;
+  font-size: 14px; line-height: 1.45; animation: modal-enter var(--motion-layer) var(--ease-out) both;
 }
 .toast .icon-button { width: 32px; min-height: 32px; }
 .qr-skeleton {
@@ -215,7 +215,7 @@ body:has(dialog:modal) { overflow: hidden; }
 }
 @keyframes skeleton-sweep { to { background-position-x: -220%; } }
 
-@media (max-width: 760px) {
+@media (max-width: 760px), (max-width: 1023px) and (pointer: coarse) {
   .menu-button { flex-shrink: 0; }
   .dialog.drawer {
     inset: auto 0 0; width: 100%; max-height: min(82dvh, calc(100dvh - 40px));

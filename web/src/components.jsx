@@ -1,6 +1,5 @@
 import { useId } from 'react';
-import { ArrowRight, ChevronRight, Sparkles } from 'lucide-react';
-import { Tooltip } from './interactions';
+import { ChevronRight } from 'lucide-react';
 
 export function PageHead({ title, description, heading: Heading = 'h1', children }) {
   return <header className="page-head">
@@ -48,19 +47,4 @@ export function Tabs({ items, value, onChange, label = '筛选' }) {
 export function Table({ headers, children }) {
   return <div className="table-scroll"><table><thead><tr>{headers.map(label => <th scope="col" key={label}>{label}</th>)}</tr></thead>
     <tbody>{children}</tbody></table></div>;
-}
-
-export function AgentInput({ onSubmit, busy = false }) {
-  return <form className="agent-input" onSubmit={event => {
-    event.preventDefault();
-    const field = event.currentTarget.elements.command;
-    if (!busy && field.value.trim()) {
-      onSubmit(field.value.trim());
-      field.value = '';
-    }
-  }}>
-    <Sparkles size={23} aria-hidden="true" />
-    <input name="command" aria-label="对 Agent 说" placeholder="例如：创新工作坊几点开始？" maxLength={2000} required />
-    <Tooltip text="也可以按回车提交"><button className="button primary icon-button" aria-label="提交给 Agent" disabled={busy}><ArrowRight size={23} aria-hidden="true" /></button></Tooltip>
-  </form>;
 }

@@ -7,7 +7,7 @@ import { ProjectMemory } from './ProjectMemory';
 import { ImportReview, OrganizedPlan } from './ImportReview';
 import { changeNotice, checkCandidate, makeChange, money, moveCandidate, participantCount, roomLabel, timeRange } from './model';
 
-export function Sources({ event, update, notify, navigate, importFiles, importRun, memoryEvidenceId, openImport, organize, organizationRun, sourceIssueId }) {
+export function Sources({ event, readOnly, update, notify, navigate, importFiles, importRun, memoryEvidenceId, openImport, organize, organizationRun, sourceIssueId }) {
   const [selectedIssue, setSelectedIssue] = useState(sourceIssueId);
   useEffect(() => { if (sourceIssueId) setSelectedIssue(sourceIssueId); }, [sourceIssueId]);
   const issue = event.issues.find(item => item.id === (sourceIssueId ?? selectedIssue)) ?? event.issues.find(item => !item.resolved) ?? event.issues[0];
@@ -20,8 +20,8 @@ export function Sources({ event, update, notify, navigate, importFiles, importRu
     notify('已保存到计划草稿');
   }
   return <>
-    <PageHead heading="h2" title="资料与确认" description="批量导入资料，建立活动索引，核对原文。">
-      <button className="button" onClick={openImport}>导入为新活动</button>
+    <PageHead heading="h2" title="资料与确认" description={readOnly ? '浏览活动资料，对照有冲突的原文。' : '批量导入资料，建立活动索引，核对原文。'}>
+      {!readOnly && <button className="button" onClick={openImport}>导入为新活动</button>}
     </PageHead>
     {event.issues.length > 0 && <Panel title="资料待确认">
       <div className="selection-list">{event.issues.map(item => <button key={item.id} aria-pressed={item.id === issue?.id} onClick={() => navigate('sources/issue/' + item.id)}>
@@ -33,17 +33,17 @@ export function Sources({ event, update, notify, navigate, importFiles, importRu
         <div className="evidence-grid">{issue.choices.map(choice => <article key={choice.file} className="evidence">
           <div className="file-title"><FileText size={18} /><strong>{choice.file}</strong></div><p className="muted">{choice.location}</p>
           <blockquote>{choice.quote}</blockquote>
-          <button className="button" onClick={() => confirm(choice.value)} disabled={issue.resolved === choice.value}>采用 {issue.id === 'budget' ? money(choice.value) : choice.value}</button>
+          {!readOnly && <button className="button" onClick={() => confirm(choice.value)} disabled={issue.resolved === choice.value}>采用 {issue.id === 'budget' ? money(choice.value) : choice.value}</button>}
         </article>)}</div>
         {issue.resolved && issue.sessionId && <div className="actions publish-actions">
           <LinkButton onClick={() => navigate('schedule')}>查看议程中的草稿时间</LinkButton>
         </div>}
       </Panel>
     </div>}
-    <ProjectMemory eventId={event.id} importFiles={importFiles} importRun={importRun} evidenceId={memoryEvidenceId}
+    {!readOnly && <ProjectMemory eventId={event.id} importFiles={importFiles} importRun={importRun} evidenceId={memoryEvidenceId}
       onCloseEvidence={() => navigate('sources', { preserveScroll: true })} onAccessChange={allowed => organize(event.id, allowed)}>
       <ImportReview {...{ event, update, notify, navigate, organize, organizationRun, importRun }} />
-    </ProjectMemory>
+    </ProjectMemory>}
     {event.files.length > 0 && <details className="activity-file-history">
       <summary>样例与旧资料登记（{event.files.length}）</summary>
       <Table headers={['文件', '状态']}>{event.files.map(file => <tr key={file.id}>
@@ -53,7 +53,7 @@ export function Sources({ event, update, notify, navigate, importFiles, importRu
   </>;
 }
 
-export function Schedule({ event, openChange, update, notify }) {
+export function Schedule({ event, readOnly, openChange, update, notify }) {
   const [room, setRoom] = useState('全部');
   const [editing, setEditing] = useState(null);
   const [problem, setProblem] = useState('');
@@ -72,7 +72,7 @@ export function Schedule({ event, openChange, update, notify }) {
     setProblem('');
   }
   return <>
-    <PageHead heading="h2" title="方案与议程" description="查看各会场的安排，编辑时间或拖动环节，发布前统一校验。">
+    <PageHead heading="h2" title="方案与议程" description={readOnly ? '查看各会场的容量、设备和议程安排。' : '查看各会场的安排，编辑时间或拖动环节，发布前统一校验。'}>
       <Badge tone={event.version ? 'success' : 'neutral'}>{event.version ? '发布版本 v' + event.version : '计划草稿'}</Badge>
     </PageHead>
     {event.organizedPlan && <div className="activity-anchor" id="activity-organized-plan">
@@ -80,26 +80,27 @@ export function Schedule({ event, openChange, update, notify }) {
     </div>}
     <Panel title="会场安排">
       <div className="room-grid">{event.rooms.map(item => <div className={'room' + (dragRoom === item.id ? ' dragging' : '')} key={item.id}
-        onDragOver={e => { e.preventDefault(); setDragRoom(item.id); }} onDragLeave={e => { if (!e.currentTarget.contains(e.relatedTarget)) setDragRoom(''); }} onDrop={e => {
+        onDragOver={e => { if (!readOnly) { e.preventDefault(); setDragRoom(item.id); } }} onDragLeave={e => { if (!e.currentTarget.contains(e.relatedTarget)) setDragRoom(''); }} onDrop={e => {
+          if (readOnly) return;
           e.preventDefault();
           setDragRoom('');
           const session = event.agenda.find(entry => entry.id === e.dataTransfer.getData('text/plain'));
           if (session) createProposal(session, item.id, session.start);
         }}>
         <MapPin size={21} /><strong>{roomLabel(item.id)}</strong><span>{item.capacity} 个名额 · {item.equipment.join('、')}</span>
-        <small>拖动下方环节到这里换厅</small>
+        {!readOnly && <small>拖动下方环节到这里换厅</small>}
       </div>)}</div>
     </Panel>
     <Panel title="活动议程" action={<Tabs label="按会场筛选" items={['全部', ...event.rooms.map(item => roomLabel(item.id))]} value={room} onChange={setRoom} />}>
       {problem && !editing && <Notice tone="warning" announce>{problem}</Notice>}
-      <Table headers={['时间', '环节', '会场', '嘉宾', '确认报名', '操作']}>
+      <Table headers={['时间', '环节', '会场', '嘉宾', '确认报名', ...(readOnly ? [] : ['操作'])]}>
         {sessions.map(item => {
           const confirmedTime = event.issues.find(issue => issue.sessionId === item.id)?.resolved;
-          return <tr key={item.id} draggable onDragStart={e => { e.dataTransfer.setData('text/plain', item.id); e.dataTransfer.effectAllowed = 'move'; }} onDragEnd={() => setDragRoom('')}>
+          return <tr key={item.id} draggable={!readOnly} onDragStart={e => { e.dataTransfer.setData('text/plain', item.id); e.dataTransfer.effectAllowed = 'move'; }} onDragEnd={() => setDragRoom('')}>
             <td className="tabular">{timeRange(item)}</td><td><strong>{item.title}</strong>
               {confirmedTime && confirmedTime !== item.start && <small className="field-note">资料草稿建议 {confirmedTime}</small>}</td>
             <td>{roomLabel(item.room)}</td><td>{item.guest}</td><td>{participantCount(event, item.id)} 人</td>
-            <td><button className="button small" aria-haspopup="dialog" onClick={() => { setProblem(''); setEditing(item); }}>调整</button></td>
+            {!readOnly && <td><button className="button small" aria-haspopup="dialog" onClick={() => { setProblem(''); setEditing(item); }}>调整</button></td>}
           </tr>;
         })}
       </Table>
@@ -141,7 +142,7 @@ function ImpactTable({ before, after }) {
   </tr>)}</Table>;
 }
 
-function ActiveChange({ event, publish }) {
+function ActiveChange({ event, readOnly, publish }) {
   const change = event.change;
   const choices = change.candidates.map(candidate => ({ candidate, issues: checkCandidate(event, change, candidate) }));
   const [selection, setSelection] = useState(() => Math.max(0, choices.findIndex(item => item.issues.length === 0)));
@@ -182,10 +183,10 @@ function ActiveChange({ event, publish }) {
         <div><p className="muted">通知预览（演练）</p><div className="message-preview">{changeNotice(change, choice.candidate)}</div></div>
       </div>
     </Panel>}
-    <div className="actions publish-actions">
+    {!readOnly && <div className="actions publish-actions">
       <button className="button" aria-haspopup="dialog" disabled={!choice || choice.issues.length > 0} onClick={() => openPublish('publish')}>仅发布</button>
       <button className="button primary" aria-haspopup="dialog" disabled={!choice || choice.issues.length > 0} onClick={() => openPublish('notify')}>发布并记录演练通知</button>
-    </div>
+    </div>}
     {publishMode && choice && <Dialog title="确认发布变更" close={() => setPublishMode('')} footer={<>
       <button className="button" type="button" onClick={() => setPublishMode('')}>返回核对</button>
       <button className="button primary" type="button" disabled={choice.issues.length > 0} onClick={() => {
@@ -200,18 +201,18 @@ function ActiveChange({ event, publish }) {
   </>;
 }
 
-export function ChangePage({ event, publish, navigate, activateChange }) {
+export function ChangePage({ event, readOnly, publish, navigate, activateChange }) {
   const latest = event.history[0];
   return <>
-    <PageHead heading="h3" title="变更单" description="核对影响、比较方案，再统一发布。" />
-    {event.change ? <ActiveChange key={event.change.id} event={event} publish={publish} /> : <Panel title={latest ? '最近发布' : '待发布变更'}>
+    <PageHead heading="h3" title="变更单" description={readOnly ? '比较候选方案，查看发布影响和通知预览。' : '核对影响、比较方案，再统一发布。'} />
+    {event.change ? <ActiveChange key={event.change.id} event={event} readOnly={readOnly} publish={publish} /> : <Panel title={latest ? '最近发布' : '待发布变更'}>
       {latest ? <>
         <Notice tone="success">{latest.title}已发布 · v{latest.version} · {latest.notified ? '已记录演练通知' : '仅发布安排'}</Notice>
         <ImpactTable before={latest.before} after={latest.after} />
         <div className="actions publish-actions"><LinkButton onClick={() => navigate('live')}>查看现场看板</LinkButton></div>
-      </> : <Empty>当前没有待发布的调整，可从议程或现场创建。</Empty>}
+      </> : <Empty>{readOnly ? '暂无待发布的调整。' : '当前没有待发布的调整，可从议程或现场创建。'}</Empty>}
     </Panel>}
-    {event.draftChanges?.length > 0 && <Panel title="其他待评估变更">
+    {!readOnly && event.draftChanges?.length > 0 && <Panel title="其他待评估变更">
       <div className="selection-list">{event.draftChanges.map(change => <button key={change.id} onClick={() => activateChange(change)}>{change.title}<span className="muted">{change.reason}</span></button>)}</div>
     </Panel>}
   </>;

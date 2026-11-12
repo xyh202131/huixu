@@ -9,7 +9,7 @@ import { channels, dateLabel, materialKinds, materialText, participantCount, roo
 const statuses = ['全部', '已确认', '待审核', '候补'];
 const statusTone = { 已确认: 'success', 待审核: 'amber', 候补: 'purple' };
 
-export function Registration({ event, update, notify }) {
+export function Registration({ event, readOnly, update, notify }) {
   const [filter, setFilter] = useState('全部');
   const [query, setQuery] = useState('');
   const [page, setPage] = useState(0);
@@ -53,9 +53,11 @@ export function Registration({ event, update, notify }) {
     });
   }
   return <>
-    <PageHead heading="h2" title="报名与发布" description="查看公开页、报名审核、分场名额和候补。">
-      <button className="button" aria-haspopup="dialog" onClick={() => { setQr(''); setShowQr(true); }}><QrCode size={18} />报名二维码</button>
-      <a className="button primary" href={publicPath}><ExternalLink size={17} />预览活动页</a>
+    <PageHead heading="h2" title="报名与发布" description={readOnly ? '查看报名状态、分场名额和候补名单。' : '查看公开页、报名审核、分场名额和候补。'}>
+      {!readOnly && <>
+        <button className="button" aria-haspopup="dialog" onClick={() => { setQr(''); setShowQr(true); }}><QrCode size={18} />报名二维码</button>
+        <a className="button primary" href={publicPath}><ExternalLink size={17} />预览活动页</a>
+      </>}
     </PageHead>
     <Panel title="报名管理" action={<Badge tone="success">{participantCount(event)} / {event.capacity} 已确认</Badge>}>
       <div className="toolbar" ref={toolbar}>
@@ -64,14 +66,14 @@ export function Registration({ event, update, notify }) {
       </div>
       {problem && <Notice tone="warning" announce>{problem}</Notice>}
       {people.length ? <>
-        <Table headers={['姓名', '分场', '状态', '个人凭证', '操作']}>{people.slice(currentPage * pageSize, (currentPage + 1) * pageSize).map(person => <tr key={person.id}>
+        <Table headers={['姓名', '分场', '状态', '个人凭证', ...(readOnly ? [] : ['操作'])]}>{people.slice(currentPage * pageSize, (currentPage + 1) * pageSize).map(person => <tr key={person.id}>
           <td><strong>{person.name}</strong></td><td>{event.agenda.find(item => item.id === person.sessionId)?.title ?? '全场'}</td>
           <td><Badge tone={statusTone[person.status]}>{person.status}</Badge></td><td className="tabular">{person.id}</td>
-          <td><div className="actions compact">{person.status === '已确认' ? <Popconfirm label="转候补" confirmLabel="确认转候补"
+          {!readOnly && <td><div className="actions compact">{person.status === '已确认' ? <Popconfirm label="转候补" confirmLabel="确认转候补"
             description={'将' + person.name + '转为候补，并释放已确认名额？'} onConfirm={() => moveToWaitlist(person)} /> : <>
             <button className="button small" id={'confirm-' + person.id} onClick={() => changeStatus(person, '已确认')}>确认报名</button>
             {person.status !== '候补' && <button className="button small" onClick={() => changeStatus(person, '候补')}>加入候补</button>}
-          </>}</div></td>
+          </>}</div></td>}
         </tr>)}</Table>
         <div className="pagination"><span className="muted">共 {people.length} 人 · 第 {currentPage + 1} 页</span>
           <button className="button small" onClick={() => setPage(currentPage - 1)} disabled={currentPage === 0}>上一页</button>
@@ -79,10 +81,10 @@ export function Registration({ event, update, notify }) {
       </> : <Empty>没有符合条件的报名。</Empty>}
     </Panel>
     <div className="split"><Panel title="报名设置">
-      <CheckControl variant="switch" label="开放公开报名" description={event.formOpen ? '报名已开放' : '报名已暂停'} checked={event.formOpen} onChange={formOpen => {
+      {readOnly ? <Badge tone={event.formOpen ? 'success' : 'neutral'}>{event.formOpen ? '报名已开放' : '报名已暂停'}</Badge> : <CheckControl variant="switch" label="开放公开报名" description={event.formOpen ? '报名已开放' : '报名已暂停'} checked={event.formOpen} onChange={formOpen => {
         update(current => ({ ...current, formOpen }));
         notify(formOpen ? '已开放公开报名' : '已暂停公开报名');
-      }} />
+      }} />}
     </Panel><Panel title="票务接入"><p className="muted">本地演练使用免费报名。付费票、选座和退款待接入服务。</p></Panel></div>
     {showQr && <Dialog title="报名二维码" variant="drawer" close={() => setShowQr(false)}>
       <div className="qr-content">{qr === 'error' ? <Notice tone="error" announce>二维码生成失败，可使用下方链接。</Notice> : qr ? <img src={qr} alt="本机报名页二维码" width="230" height="230" /> : <div className="qr-skeleton" role="status"><span className="sr-only">正在生成二维码</span></div>}
@@ -165,7 +167,7 @@ function downloadText(name, text) {
   setTimeout(() => URL.revokeObjectURL(url), 1000);
 }
 
-export function Materials({ event, update, notify }) {
+export function Materials({ event, readOnly, update, notify }) {
   const [kind, setKind] = useState(materialKinds[0]);
   const [preview, setPreview] = useState(null);
   const [previewNeedsUpdate, setPreviewNeedsUpdate] = useState(false);
@@ -187,7 +189,7 @@ export function Materials({ event, update, notify }) {
     setPreviewNeedsUpdate(false);
   }
   return <>
-    <PageHead heading="h3" title="材料与沟通" description="从同一版计划生成材料，核对人群和渠道后记录演练发送。">
+    <PageHead heading="h3" title="材料与沟通" description={readOnly ? '查看同一版计划生成的材料，按人群和渠道预览通知。' : '从同一版计划生成材料，核对人群和渠道后记录演练发送。'}>
       <Badge tone={event.version ? 'success' : 'neutral'}>{event.version ? '发布版本 v' + event.version : '计划草稿'}</Badge>
     </PageHead>
     <Tabs label="材料类型" items={materialKinds} value={kind} onChange={value => { setKind(value); markPreviewStale(); }} />
@@ -208,13 +210,13 @@ export function Materials({ event, update, notify }) {
         <td>{message.subject}</td><td>{message.channel}</td><td>{message.count}</td><td>{message.version ? 'v' + message.version : '草稿'}</td><td><Badge tone="success">演练已记录</Badge></td>
       </tr>)}</Table> : <Empty>暂无演练通知记录。</Empty>}
     </Panel>
-    {preview && <Dialog title="通知预览" variant="drawer" close={() => setPreview(null)} footer={<>
+    {preview && <Dialog title="通知预览" variant="drawer" close={() => setPreview(null)} footer={(!readOnly || previewNeedsUpdate) && <>
       {previewNeedsUpdate && <button type="submit" form={formId} className="button">更新预览</button>}
-      <button className="button primary" disabled={previewNeedsUpdate || !preview.count} onClick={() => {
+      {!readOnly && <button className="button primary" disabled={previewNeedsUpdate || !preview.count} onClick={() => {
         update(current => ({ ...current, messages: [{ ...preview, date: new Date().toLocaleString('zh-CN') }, ...current.messages] }));
         setPreview(null);
         notify('演练通知已记录');
-      }}>记录演练发送</button>
+      }}>记录演练发送</button>}
     </>}>
       {previewNeedsUpdate && <Notice tone="warning" announce>材料或筛选条件已改变，请更新预览后再确认。</Notice>}
       <p>{preview.channel} · {preview.count} 位接收对象</p>
