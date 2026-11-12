@@ -1,0 +1,12 @@
+.env
+.env.*
+!web/.env.example
+.memorax-code/
+.repo_memory/
+
+*.db
+*.sqlite
+*.sqlite3
+*-wal
+*-shm
+*-journal

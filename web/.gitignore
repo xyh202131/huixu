@@ -1,0 +1,6 @@
+node_modules/
+dist/
+/.env*
+!/.env.example
+/.parser-deps/
+__pycache__/
