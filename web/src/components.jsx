@@ -2,9 +2,9 @@ import { useId } from 'react';
 import { ArrowRight, ChevronRight, Sparkles } from 'lucide-react';
 import { Tooltip } from './interactions';
 
-export function PageHead({ title, description, children }) {
+export function PageHead({ title, description, heading: Heading = 'h1', children }) {
   return <header className="page-head">
-    <div><h1>{title}</h1><p>{description}</p></div>
+    <div><Heading>{title}</Heading>{description && <p>{description}</p>}</div>
     {children && <div className="actions">{children}</div>}
   </header>;
 }

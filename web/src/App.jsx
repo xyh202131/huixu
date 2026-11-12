@@ -1,8 +1,9 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { ArrowRightLeft, BookOpen, Calendar, ChevronDown, FileText, Home, Layers, LogOut, MessageSquare, Monitor, Plus, Sparkles, Ticket, UsersRound } from 'lucide-react';
-import { AgentInput } from './components';
-import { AuthPage, useWorkbenchSession } from './Auth';
-import { Dialog, MenuIcon, Notice, Toast, Tooltip } from './interactions';
+import { Calendar, Plus, Sparkles } from 'lucide-react';
+import { AgentInput, PageHead } from './components';
+import { AccountAvatar, AccountDialog, useWorkbenchSession } from './Auth';
+import { ActivityDirectory, chapterFor, chapters, jumpToActivity } from './ActivityNavigation';
+import { Dialog, Notice, Toast, Tooltip } from './interactions';
 import { Select } from './Select';
 import { askModel } from './agentClient';
 import { importSource, organizationRequest, sourceAccept } from './memoryClient';
@@ -13,18 +14,8 @@ import { Materials, PublicEvent, Registration } from './Attendees';
 import { Live, Review } from './LiveReview';
 import { activityTypes, checkCandidate, externalRoles, loadEvents, makeChange, moveCandidate, newEvent, planFromText, publishChange } from './model';
 
-const pages = [
-  { id: 'overview', label: '活动概览', icon: Home, view: Overview },
-  { id: 'sources', label: '资料与确认', icon: FileText, view: Sources },
-  { id: 'schedule', label: '方案与议程', icon: Calendar, view: Schedule },
-  { id: 'prep', label: '筹备与资源', icon: Layers, view: Preparation },
-  { id: 'external', label: '外部协作', icon: UsersRound, view: External },
-  { id: 'registration', label: '报名与票务', icon: Ticket, view: Registration },
-  { id: 'materials', label: '材料与沟通', icon: MessageSquare, view: Materials },
-  { id: 'change', label: '变更单', icon: ArrowRightLeft, view: ChangePage },
-  { id: 'live', label: '现场执行', icon: Monitor, view: Live },
-  { id: 'review', label: '复盘与模板', icon: BookOpen, view: Review },
-];
+const views = { overview: Overview, sources: Sources, schedule: Schedule, prep: Preparation, external: External,
+  registration: Registration, materials: Materials, change: ChangePage, live: Live, review: Review };
 
 function routeFromHash() {
   return location.hash.replace(/^#\/?/, '').split('/');
@@ -33,28 +24,26 @@ function routeFromHash() {
 function useRoute() {
   const [route, setRoute] = useState(routeFromHash);
   useEffect(() => {
-    const refresh = () => { setRoute(routeFromHash()); window.scrollTo(0, 0); };
+    const refresh = () => setRoute(routeFromHash());
     window.addEventListener('hashchange', refresh);
     return () => window.removeEventListener('hashchange', refresh);
   }, []);
   return route;
 }
 
-function Sidebar({ events, event, page, select, navigate, team, account, openAccount, closeMenu, compact = false }) {
-  return <>
-      {!compact && <button className="brand" onClick={() => navigate('overview')}><Calendar size={33} strokeWidth={1.9} /><span>会序</span></button>}
-      <Select label="切换活动" compact value={event.id} onChange={select}
-        options={events.map(item => ({ value: item.id, label: item.title, detail: item.type }))} />
-      <p className="nav-label">工作台</p>
-      <nav aria-label="工作台">{pages.map(({ id, label, icon: Icon }) => <a href={'#/' + id} key={id}
-        aria-current={page === id ? 'page' : undefined} onClick={closeMenu}><Icon size={21} strokeWidth={1.8} />{label}</a>)}</nav>
-      <footer className="sidebar-footer">
-        <button onClick={team}><UsersRound size={22} strokeWidth={1.8} />活动团队</button>
-        <button type="button" className="sidebar-account" aria-label="打开账户设置" aria-haspopup="dialog" onClick={openAccount}>
-          <span className="avatar" aria-hidden="true">{Array.from(account.name)[0]}</span><span className="sidebar-account-name">{account.name}</span><ChevronDown size={17} aria-hidden="true" />
-        </button>
-      </footer>
-  </>;
+function ActivitySections(props) {
+  return chapters.map(({ id, label, subsections }) => {
+    const View = views[id];
+    return <section className="activity-chapter" id={'activity-' + id} aria-label={label} key={id}>
+      <View {...props} />
+      {subsections?.map(section => {
+        const Subsection = views[section.id];
+        return <section key={section.id} className="activity-subsection" id={'activity-' + section.id} aria-label={section.label}>
+          <Subsection {...props} />
+        </section>;
+      })}
+    </section>;
+  });
 }
 
 function CreateEvent({ draft, create, close }) {
@@ -93,15 +82,17 @@ function CreateEvent({ draft, create, close }) {
 
 export function App() {
   const route = useRoute();
-  const { session, refresh, signIn, signOut } = useWorkbenchSession();
+  const auth = useWorkbenchSession();
   const [path, eventId, role] = route;
   const guestLink = Boolean(eventId) && (path === 'public' || (path === 'external' && Object.hasOwn(externalRoles, role)));
-  if (!session.user && !guestLink) return <AuthPage session={session} refresh={refresh} signIn={signIn} />;
-  return <Workbench key={session.user?.id ?? 'guest'} route={route} account={session.user} signOut={signOut} />;
+  const account = auth.session.user;
+  return <Workbench key={account?.id ?? (guestLink ? 'guest' : 'signed-out')} route={route} auth={auth}
+    canReadEvents={Boolean(account || guestLink)} />;
 }
 
-function Workbench({ route, account, signOut }) {
-  const [events, setEvents] = useState(loadEvents);
+function Workbench({ route, auth, canReadEvents }) {
+  const account = auth.session.user;
+  const [events, setEvents] = useState(() => canReadEvents ? loadEvents() : []);
   const [activeId, setActiveId] = useState(() => sessionStorage.getItem('huixu.active') ?? 'forum');
   const [modal, setModal] = useState('');
   const [draft, setDraft] = useState(null);
@@ -113,41 +104,52 @@ function Workbench({ route, account, signOut }) {
   const importingEvents = useRef(new Set());
   const [toast, setToast] = useState(null);
   const toastId = useRef(0);
-  const [menu, setMenu] = useState(false);
+  const pendingJump = useRef(null);
   const [path, routeEventId, role] = route;
-  const [accountAction, setAccountAction] = useState(null);
-  const page = pages.find(item => item.id === path) ?? pages[0];
+  const page = Object.hasOwn(views, path) ? path : 'overview';
+  const chapter = chapterFor(page);
+  const pageLabel = chapter.subsections?.find(section => section.id === page)?.label ?? chapter.label;
   const externalRoute = path === 'external' && Boolean(routeEventId);
   const publicRoute = path === 'public' && Boolean(routeEventId);
   const event = events.find(item => item.id === (externalRoute || publicRoute ? routeEventId : activeId)) ?? events[0];
-  const Page = page.view;
-  const showExternal = externalRoute && event.id === routeEventId && Object.hasOwn(externalRoles, role);
-  const showPublic = publicRoute && event.id === routeEventId;
-  const pageTitle = showExternal || showPublic ? event.title : externalRoute || publicRoute ? '活动链接不可用' : page.label;
+  const showExternal = externalRoute && event?.id === routeEventId && Object.hasOwn(externalRoles, role);
+  const showPublic = publicRoute && event?.id === routeEventId;
+  const pageTitle = showExternal || showPublic ? event.title : externalRoute || publicRoute ? '活动链接不可用' : pageLabel;
 
   useEffect(() => {
+    if (!canReadEvents) return;
     try {
       localStorage.setItem('huixu.events.2', JSON.stringify(events));
     } catch {
       // 存储被禁用时，当前标签页仍可操作。
     }
-  }, [events]);
+  }, [canReadEvents, events]);
   useEffect(() => {
+    if (!canReadEvents) return;
     const sync = e => { if (e.key === 'huixu.events.2') setEvents(loadEvents()); };
     window.addEventListener('storage', sync);
     return () => window.removeEventListener('storage', sync);
-  }, []);
+  }, [canReadEvents]);
   useEffect(() => {
     document.title = pageTitle + ' · 会序';
   }, [pageTitle]);
   useEffect(() => {
     setModal('');
-    setMenu(false);
   }, [path, routeEventId, role]);
+  useEffect(() => {
+    const jump = pendingJump.current?.destination === location.hash ? pendingJump.current : null;
+    pendingJump.current = null;
+    if (jump?.preserveScroll) return;
+    const frame = requestAnimationFrame(() => {
+      if (publicRoute || externalRoute || !account || !path) window.scrollTo(0, 0);
+      else jumpToActivity(route, Boolean(jump));
+    });
+    return () => cancelAnimationFrame(frame);
+  }, [route, event?.id, Boolean(account), externalRoute, publicRoute]);
   useEffect(() => {
     setAgentRun(null);
     return () => agentRequest.current?.abort();
-  }, [path, event.id]);
+  }, [path, event?.id]);
 
   const dismissToast = useCallback(() => setToast(null), []);
   function notify(message) {
@@ -155,10 +157,15 @@ function Workbench({ route, account, signOut }) {
     setToast({ id: toastId.current, text: message });
   }
 
-  function navigate(id) {
-    setMenu(false);
+  function navigate(id, { preserveScroll = false } = {}) {
     setModal('');
-    location.hash = '/' + id;
+    const destination = '#/' + id;
+    if (location.hash === destination) {
+      if (!preserveScroll && account) jumpToActivity(id.split('/'), true);
+      return;
+    }
+    pendingJump.current = { destination, preserveScroll };
+    location.hash = destination;
   }
   function select(id, destination = 'overview') {
     setActiveId(id);
@@ -302,38 +309,48 @@ function Workbench({ route, account, signOut }) {
     openChange(makeChange(session, [moveCandidate(session, proposal.room, proposal.start)], '模型提出的调整建议'));
   }
 
-  const props = { event, update, navigate, notify, ask, openChange, publish, copy, activateChange, openImport, importFiles,
-    importRun: importRuns[event.id], memoryEvidenceId: path === 'sources' ? routeEventId : undefined,
-    organize, organizationRun: organizationRuns[event.id] };
-  const sidebar = { events, event, page: page.id, select, navigate, account, closeMenu: () => setMenu(false),
-    team: () => { setMenu(false); setModal('team'); },
-    openAccount: () => { setMenu(false); setAccountAction(null); setModal('account'); },
-  };
+  const sourceIssueId = path === 'sources' && routeEventId === 'issue' ? role : undefined;
+  const props = { event, update, navigate, notify, ask, openChange, publish, copy, activateChange, openImport, importFiles, sourceIssueId,
+    importRun: importRuns[event?.id], memoryEvidenceId: path === 'sources' && routeEventId !== 'issue' ? routeEventId : undefined,
+    organize, organizationRun: organizationRuns[event?.id] };
   if ((publicRoute || externalRoute) && !showPublic && !showExternal) return <main className="unavailable-link">
     <h1>活动链接不可用</h1><p className="muted">请向活动负责人索取当前链接。</p>
   </main>;
   return <>
     {showExternal ? <ExternalForm key={routeEventId + role} {...props} role={role} /> : showPublic ? <PublicEvent key={routeEventId} {...props} /> :
-      <div className="shell">
+      <div className="activity-shell">
         <a className="skip-link" href="#workbench" onClick={e => { e.preventDefault(); document.getElementById('workbench').focus(); }}>跳转到工作台内容</a>
-        <aside className="sidebar"><Sidebar {...sidebar} /></aside>
-        <div className="main-column">
-          <header className="topbar">
-            <div className="breadcrumbs"><button className="icon-button menu-button" aria-label="打开菜单" aria-expanded={menu} aria-haspopup="dialog" onClick={() => setMenu(true)}>
-              <MenuIcon />
-            </button>
-              <span>工作台</span><span aria-hidden="true">/</span><strong>{page.label}</strong></div>
-            <div className="actions">
-              <button className="button" onClick={() => { setDraft(null); setModal('create'); }}><Plus size={19} />新建活动</button>
-              <Tooltip text="用自然语言创建活动或调整议程"><button className="button primary" aria-haspopup="dialog" onClick={() => setModal('agent')}><Sparkles size={19} />打开 Agent</button></Tooltip>
+        <header className="activity-topbar">
+          <div className="activity-toolbar">
+            <div className="activity-toolbar-context">
+              <button type="button" className="activity-brand" aria-label="会序，返回活动概况" onClick={() => navigate('overview')}>
+                <Calendar size={25} strokeWidth={1.9} aria-hidden="true" /><span>会序</span>
+              </button>
+              {account && <Select label="切换活动" compact value={event.id} onChange={select}
+                options={events.map(item => ({ value: item.id, label: item.title, detail: item.type }))} />}
             </div>
-          </header>
-          <main id="workbench" tabIndex={-1} className="workspace" key={event.id + ':' + page.id}>
-            <Page {...props} />
-          </main>
-        </div>
+            <div className="activity-toolbar-actions">
+              <ActivityDirectory page={page} followScroll={Boolean(account)} navigate={navigate} />
+              {account && <>
+                <button type="button" className="button toolbar-action" aria-label="新建活动" onClick={() => { setDraft(null); setModal('create'); }}>
+                  <Plus size={18} aria-hidden="true" /><span>新建</span>
+                </button>
+                <Tooltip text="用自然语言创建活动或调整议程"><button type="button" className="button primary toolbar-action" aria-label="打开 Agent"
+                  aria-haspopup="dialog" onClick={() => setModal('agent')}><Sparkles size={18} aria-hidden="true" /><span>Agent</span></button></Tooltip>
+              </>}
+              <button type="button" className="icon-button activity-account" aria-label={account ? '打开账户设置' : '登录工作台'}
+                aria-haspopup="dialog" onClick={() => setModal('account')}><AccountAvatar user={account} /></button>
+            </div>
+          </div>
+        </header>
+        <main id="workbench" tabIndex={-1} className="workspace activity-workspace">
+          {account ? <ActivitySections key={event.id} {...props} /> :
+            <section className="activity-chapter" aria-label={pageLabel}>
+              <PageHead title={pageLabel} />
+              <Notice announce>{auth.session.loading ? '正在检查登录状态…' : '点击头像登录后查看活动内容。'}</Notice>
+            </section>}
+        </main>
       </div>}
-    {menu && <Dialog title="会序工作台" variant="navigation" close={() => setMenu(false)}><Sidebar {...sidebar} compact /></Dialog>}
     {modal === 'create' && <CreateEvent draft={draft} create={create} close={() => setModal('')} />}
     {modal === 'agent' && <Dialog title="活动 Agent" variant="drawer" close={() => { stopAgent(); setModal(''); }}>
       <p className="muted">查询当前议程、筹备状态和允许引用的活动资料，也可以准备活动草稿或议程变更。</p>
@@ -365,17 +382,7 @@ function Workbench({ route, account, signOut }) {
       <p className="muted">当前为本机工作台演练。以下为样例分工。</p>
       <ul className="plain-list"><li>林澄 · 活动负责人</li><li>唐悦 · 策划与统筹</li><li>顾言 · 现场总控</li></ul>
     </Dialog>}
-    {modal === 'account' && <Dialog title="账户与会话" variant="drawer" close={() => setModal('')}>
-      <div className="account-identity">
-        <span className="avatar" aria-hidden="true">{Array.from(account.name)[0]}</span>
-        <div><strong>{account.name}</strong><p className="muted">{account.email}</p></div>
-      </div>
-      {accountAction?.error && <Notice tone="error" announce>{accountAction.error}</Notice>}
-      <button type="button" className="button" disabled={accountAction?.pending} onClick={async () => {
-        setAccountAction({ pending: true });
-        try { await signOut(); } catch (error) { setAccountAction({ error: error.message }); }
-      }}><LogOut size={18} aria-hidden="true" />{accountAction?.pending ? '正在退出…' : '退出登录'}</button>
-    </Dialog>}
+    {modal === 'account' && <AccountDialog {...auth} openTeam={() => setModal('team')} close={() => setModal('')} />}
     <Toast feedback={toast} dismiss={dismissToast} />
   </>;
 }

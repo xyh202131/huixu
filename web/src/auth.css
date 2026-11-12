@@ -1,39 +1,13 @@
-.auth-page { display: grid; place-items: center; min-height: 100dvh; padding: clamp(16px, 5vw, 72px); }
-.auth-layout {
-  display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); width: min(100%, 1010px);
-  min-height: 525px; border: 1px solid var(--border); border-radius: 24px; overflow: hidden;
-  background: var(--white); box-shadow: 0 22px 66px #30447419, 0 2px 8px #3044740c;
-}
-.auth-art {
-  min-height: 160px; padding: clamp(20px, 3.5vw, 46px); background: #dee7f8 var(--marble-ice) center / cover no-repeat;
-  border-inline-end: 1px solid var(--border);
-}
-.auth-brand {
-  display: inline-flex; align-items: center; gap: 10px; padding: 10px 14px; border-radius: 12px; background: #ffffffed;
-  color: var(--accent); font-size: 25px; font-weight: 780; letter-spacing: -.055em;
-}
-.auth-content {
-  display: grid; align-content: center; gap: 22px; min-width: 0; padding: clamp(24px, 5vw, 64px);
-}
-.auth-heading { display: grid; gap: 8px; }
-.auth-heading h1 { font-size: clamp(25px, 3vw, 36px); line-height: 1.2; text-wrap: balance; }
-.auth-heading p { color: var(--muted); font-size: 14px; line-height: 1.65; text-wrap: pretty; }
+.dialog.account-dialog { width: min(calc(100% - 28px), 420px); }
+.dialog.account-dialog::backdrop { background: transparent; animation: none; }
 .auth-form { gap: 16px; }
 .auth-password { display: grid; gap: 6px; }
 .auth-password-input { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 7px; }
 .auth-password-input .icon-button { min-height: 42px; }
 .auth-password > p { font-size: 13px; }
 .auth-form .auth-submit { justify-self: stretch; min-height: 46px; margin-top: 4px; }
-.auth-content > .button { justify-self: start; }
 .account-identity { display: flex; align-items: center; gap: 12px; min-width: 0; }
 .account-identity .avatar { flex-shrink: 0; width: 44px; height: 44px; }
 .account-identity p { margin-top: 4px; overflow-wrap: anywhere; }
 .unavailable-link { width: min(100% - 32px, 560px); margin: 15vh auto 0; padding: 20px; }
 .unavailable-link h1 { margin-bottom: 8px; }
-
-@media (max-width: 680px) {
-  .auth-page { align-items: start; padding: 20px 14px; }
-  .auth-layout { grid-template-columns: minmax(0, 1fr); min-height: 0; border-radius: 18px; }
-  .auth-art { min-height: 122px; border-inline-end: 0; border-bottom: 1px solid var(--border); background-position: center 38%; }
-  .auth-content { gap: 18px; padding: 24px 20px; }
-}

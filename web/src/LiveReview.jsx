@@ -41,7 +41,7 @@ export function Live({ event, update, openChange }) {
   }
   const entranceCount = event.checkins.filter(item => !item.sessionId).length;
   return <>
-    <PageHead title="现场执行" description="查看现场进度、核验观众凭证，或上报异常并生成调整方案。">
+    <PageHead heading="h2" title="现场执行" description="查看现场进度、核验观众凭证，或上报异常并生成调整方案。">
       <button className="button" aria-haspopup="dialog" onClick={() => setBoard(true)}><Monitor size={17} />现场大屏</button>
       <button className="button primary" aria-haspopup="dialog" onClick={() => setReport(true)}><AlertTriangle size={17} />上报问题</button>
     </PageHead>
@@ -97,7 +97,7 @@ export function Review({ event, copy, update, notify }) {
   const spending = event.quotes.reduce((sum, quote) => sum + quote.actual, 0);
   const cards = [['确认报名', total + ' 人'], ['实际入场', checked + ' 人'], ['入场率', total ? Math.round(checked * 100 / total) + '%' : '—'], ['预算 / 实支', money(event.budget) + ' / ' + money(spending)]];
   return <>
-    <PageHead title="复盘与模板" description="回顾报名、到场、预算和执行情况，复用活动安排。">
+    <PageHead heading="h2" title="复盘与模板" description="回顾报名、到场、预算和执行情况，复用活动安排。">
       <button className="button primary" onClick={copy}>复制为新活动</button>
     </PageHead>
     <div className="metrics">{cards.map(([label, value]) => <div className="metric" key={label}><div><strong>{label}</strong><MetricValue value={value} /></div></div>)}</div>

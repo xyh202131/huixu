@@ -5,7 +5,7 @@ export function MenuIcon() {
   return <span className="menu-icon" aria-hidden="true"><i /><i /><i /></span>;
 }
 
-export function Dialog({ title, close, variant = 'modal', footer, children }) {
+export function Dialog({ title, close, variant = 'modal', className = '', footer, children }) {
   const element = useRef(null);
   const closeButton = useRef(null);
   const latestClose = useRef(close);
@@ -53,7 +53,7 @@ export function Dialog({ title, close, variant = 'modal', footer, children }) {
     };
   }, [variant]);
 
-  return <dialog ref={element} className={'dialog ' + variant} aria-labelledby={titleId}
+  return <dialog ref={element} className={`dialog ${variant} ${className}`} aria-labelledby={titleId}
     onCancel={event => { event.preventDefault(); close(); }}
     onClick={event => {
       if (variant !== 'modal' && event.target === event.currentTarget) close();

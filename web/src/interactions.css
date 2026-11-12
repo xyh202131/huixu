@@ -108,8 +108,7 @@ body:has(dialog:modal) { overflow: hidden; }
 }
 .dialog.drawer[open] { animation-name: drawer-enter; }
 @media (min-width: 1150px) {
-  body:has(.dialog.drawer[open]) .workspace { margin-inline-end: var(--drawer-width); }
-  body:has(.dialog.drawer[open]) .workspace :is(.split, .overview-columns, .role-grid) { grid-template-columns: minmax(0, 1fr); }
+  body:has(.dialog.drawer[open]) .workspace :is(.split, .role-grid) { grid-template-columns: minmax(0, 1fr); }
   body:has(.dialog.drawer[open]) .workspace .metrics { grid-template-columns: repeat(2, minmax(0, 1fr)); }
 }
 .dialog.navigation {
@@ -146,7 +145,6 @@ body:has(dialog:modal) { overflow: hidden; }
   line-height: 1.4; opacity: 0; visibility: hidden; translate: 0 3px;
   transition: opacity var(--motion-quick) ease, translate var(--motion-quick) ease, visibility var(--motion-quick);
 }
-.topbar .tooltip { inset: 100% 0 auto auto; translate: 0 -3px; }
 .tooltip-anchor:not([data-dismissed='true']):has(:focus-visible) .tooltip { opacity: 1; visibility: visible; translate: 0 0; }
 @media (hover: hover) {
   .tooltip-anchor:not([data-dismissed='true']):hover .tooltip { opacity: 1; visibility: visible; translate: 0 0; }
@@ -218,8 +216,6 @@ body:has(dialog:modal) { overflow: hidden; }
 @keyframes skeleton-sweep { to { background-position-x: -220%; } }
 
 @media (max-width: 760px) {
-  .topbar { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 5px; }
-  .breadcrumbs strong { overflow: hidden; text-overflow: ellipsis; }
   .menu-button { flex-shrink: 0; }
   .dialog.drawer {
     inset: auto 0 0; width: 100%; max-height: min(82dvh, calc(100dvh - 40px));

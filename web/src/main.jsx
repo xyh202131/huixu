@@ -3,6 +3,7 @@ import { App } from './App';
 import './styles.css';
 import './interactions.css';
 import './auth.css';
+import './activity.css';
 
 const root = document.getElementById('root');
 root.addEventListener('pointerdown', event => {

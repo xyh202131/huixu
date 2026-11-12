@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { ArrowRight, ArrowRightLeft, CalendarDays, FileText, MapPin, Monitor, UsersRound } from 'lucide-react';
 import { Badge, Empty, IconTile, LinkButton, PageHead, Panel, Table, Tabs } from './components';
 import { Dialog, Notice } from './interactions';
@@ -7,9 +7,10 @@ import { ProjectMemory } from './ProjectMemory';
 import { ImportReview, OrganizedPlan } from './ImportReview';
 import { changeNotice, checkCandidate, makeChange, money, moveCandidate, participantCount, roomLabel, timeRange } from './model';
 
-export function Sources({ event, update, notify, navigate, importFiles, importRun, memoryEvidenceId, openImport, organize, organizationRun }) {
-  const [selected, setSelected] = useState(event.issues.find(issue => !issue.resolved)?.id ?? event.issues[0]?.id);
-  const issue = event.issues.find(item => item.id === selected);
+export function Sources({ event, update, notify, navigate, importFiles, importRun, memoryEvidenceId, openImport, organize, organizationRun, sourceIssueId }) {
+  const [selectedIssue, setSelectedIssue] = useState(sourceIssueId);
+  useEffect(() => { if (sourceIssueId) setSelectedIssue(sourceIssueId); }, [sourceIssueId]);
+  const issue = event.issues.find(item => item.id === (sourceIssueId ?? selectedIssue)) ?? event.issues.find(item => !item.resolved) ?? event.issues[0];
   function confirm(value) {
     update(current => ({
       ...current,
@@ -19,32 +20,36 @@ export function Sources({ event, update, notify, navigate, importFiles, importRu
     notify('已保存到计划草稿');
   }
   return <>
-    <PageHead title="资料与确认" description="批量导入资料，建立活动索引，核对原文。">
+    <PageHead heading="h2" title="资料与确认" description="批量导入资料，建立活动索引，核对原文。">
       <button className="button" onClick={openImport}>导入为新活动</button>
     </PageHead>
+    {event.issues.length > 0 && <Panel title="资料待确认">
+      <div className="selection-list">{event.issues.map(item => <button key={item.id} aria-pressed={item.id === issue?.id} onClick={() => navigate('sources/issue/' + item.id)}>
+        <span>{item.title}</span><Badge tone={item.resolved ? 'success' : 'amber'}>{item.resolved ? '已确认' : '待核对'}</Badge>
+      </button>)}</div>
+    </Panel>}
+    {issue && <div className="activity-anchor" id={'activity-issue-' + issue.id}>
+      <Panel title={issue.field} action={issue.resolved && <Badge tone="success">已采用 {issue.id === 'budget' ? money(issue.resolved) : issue.resolved}</Badge>}>
+        <div className="evidence-grid">{issue.choices.map(choice => <article key={choice.file} className="evidence">
+          <div className="file-title"><FileText size={18} /><strong>{choice.file}</strong></div><p className="muted">{choice.location}</p>
+          <blockquote>{choice.quote}</blockquote>
+          <button className="button" onClick={() => confirm(choice.value)} disabled={issue.resolved === choice.value}>采用 {issue.id === 'budget' ? money(choice.value) : choice.value}</button>
+        </article>)}</div>
+        {issue.resolved && issue.sessionId && <div className="actions publish-actions">
+          <LinkButton onClick={() => navigate('schedule')}>查看议程中的草稿时间</LinkButton>
+        </div>}
+      </Panel>
+    </div>}
     <ProjectMemory eventId={event.id} importFiles={importFiles} importRun={importRun} evidenceId={memoryEvidenceId}
-      onCloseEvidence={() => navigate('sources')} onAccessChange={allowed => organize(event.id, allowed)}>
+      onCloseEvidence={() => navigate('sources', { preserveScroll: true })} onAccessChange={allowed => organize(event.id, allowed)}>
       <ImportReview {...{ event, update, notify, navigate, organize, organizationRun, importRun }} />
     </ProjectMemory>
-    {(event.files.length > 0 || event.issues.length > 0) && <div className="split">
-      {event.files.length > 0 && <Panel title="样例与旧资料登记">
-        <Table headers={['文件', '状态']}>{event.files.map(file => <tr key={file.id}>
-          <td>{file.name}</td><td><Badge tone={file.status.startsWith('样例') ? 'success' : 'neutral'}>{file.status}</Badge></td>
-        </tr>)}</Table>
-      </Panel>}
-      {event.issues.length > 0 && <Panel title="旧资料待确认">
-        <div className="selection-list">{event.issues.map(item => <button key={item.id} aria-pressed={item.id === selected} onClick={() => setSelected(item.id)}>
-          <span>{item.title}</span><Badge tone={item.resolved ? 'success' : 'amber'}>{item.resolved ? '已确认' : '待核对'}</Badge>
-        </button>)}</div>
-      </Panel>}
-    </div>}
-    {issue && <Panel title={issue.field} action={issue.resolved && <Badge tone="success">已采用 {issue.id === 'budget' ? money(issue.resolved) : issue.resolved}</Badge>}>
-      <div className="evidence-grid">{issue.choices.map(choice => <article key={choice.file} className="evidence">
-        <div className="file-title"><FileText size={18} /><strong>{choice.file}</strong></div><p className="muted">{choice.location}</p>
-        <blockquote>{choice.quote}</blockquote>
-        <button className="button" onClick={() => confirm(choice.value)} disabled={issue.resolved === choice.value}>采用 {issue.id === 'budget' ? money(choice.value) : choice.value}</button>
-      </article>)}</div>
-    </Panel>}
+    {event.files.length > 0 && <details className="activity-file-history">
+      <summary>样例与旧资料登记（{event.files.length}）</summary>
+      <Table headers={['文件', '状态']}>{event.files.map(file => <tr key={file.id}>
+        <td>{file.name}</td><td><Badge tone={file.status.startsWith('样例') ? 'success' : 'neutral'}>{file.status}</Badge></td>
+      </tr>)}</Table>
+    </details>}
   </>;
 }
 
@@ -67,10 +72,12 @@ export function Schedule({ event, openChange, update, notify }) {
     setProblem('');
   }
   return <>
-    <PageHead title="方案与议程" description="查看各会场的安排，编辑时间或拖动环节，发布前统一校验。">
+    <PageHead heading="h2" title="方案与议程" description="查看各会场的安排，编辑时间或拖动环节，发布前统一校验。">
       <Badge tone={event.version ? 'success' : 'neutral'}>{event.version ? '发布版本 v' + event.version : '计划草稿'}</Badge>
     </PageHead>
-    {event.organizedPlan && <OrganizedPlan key={event.organizedPlan.id} plan={event.organizedPlan} update={update} notify={notify} />}
+    {event.organizedPlan && <div className="activity-anchor" id="activity-organized-plan">
+      <OrganizedPlan key={event.organizedPlan.id} plan={event.organizedPlan} update={update} notify={notify} />
+    </div>}
     <Panel title="会场安排">
       <div className="room-grid">{event.rooms.map(item => <div className={'room' + (dragRoom === item.id ? ' dragging' : '')} key={item.id}
         onDragOver={e => { e.preventDefault(); setDragRoom(item.id); }} onDragLeave={e => { if (!e.currentTarget.contains(e.relatedTarget)) setDragRoom(''); }} onDrop={e => {
@@ -196,7 +203,7 @@ function ActiveChange({ event, publish }) {
 export function ChangePage({ event, publish, navigate, activateChange }) {
   const latest = event.history[0];
   return <>
-    <PageHead title="变更单" description="核对影响、比较方案，再统一发布。" />
+    <PageHead heading="h3" title="变更单" description="核对影响、比较方案，再统一发布。" />
     {event.change ? <ActiveChange key={event.change.id} event={event} publish={publish} /> : <Panel title={latest ? '最近发布' : '待发布变更'}>
       {latest ? <>
         <Notice tone="success">{latest.title}已发布 · v{latest.version} · {latest.notified ? '已记录演练通知' : '仅发布安排'}</Notice>
