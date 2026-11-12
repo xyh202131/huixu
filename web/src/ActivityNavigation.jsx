@@ -1,5 +1,5 @@
-import { useEffect, useId, useRef, useState } from 'react';
-import { BookOpen, Calendar, ChevronDown, FileText, Home, Layers, List, Monitor, Ticket } from 'lucide-react';
+import { useEffect, useRef, useState } from 'react';
+import { BookOpen, Calendar, FileText, Home, Layers, List, Monitor, Sparkles, Ticket, X } from 'lucide-react';
 
 export const chapters = [
   { id: 'overview', label: '活动概况', icon: Home },
@@ -11,6 +11,7 @@ export const chapters = [
   { id: 'live', label: '现场执行', icon: Monitor },
   { id: 'review', label: '复盘与模板', icon: BookOpen },
 ];
+const sections = chapters.flatMap(chapter => [chapter, ...(chapter.subsections ?? [])]);
 
 export function chapterFor(page) {
   return chapters.find(chapter => chapter.id === page || chapter.subsections?.some(section => section.id === page)) ?? chapters[0];
@@ -33,78 +34,82 @@ export function jumpToActivity(route, smooth = false) {
   else target.scrollIntoView({ block: 'start', behavior });
 }
 
-export function ActivityDirectory({ page, followScroll, navigate }) {
-  const id = useId();
-  const button = useRef(null);
-  const popover = useRef(null);
-  const [open, setOpen] = useState(false);
-  const [visibleChapter, setVisibleChapter] = useState(null);
-  const current = visibleChapter ?? chapterFor(page);
+export function ActivityDirectory({ id, page, mobile, navigate, agentOpen, toggleAgent }) {
+  const directory = useRef(null);
+  const [visibleSection, setVisibleSection] = useState(null);
+  const current = visibleSection ?? page;
 
   useEffect(() => {
-    if (!followScroll) return;
     let frame = 0;
     function measure() {
       frame = 0;
       const header = document.querySelector('.activity-topbar')?.getBoundingClientRect();
       const readingLine = (header?.bottom ?? 0) + 42;
-      let active = chapters[0];
-      for (const chapter of chapters) {
-        const section = document.getElementById('activity-' + chapter.id);
-        if (section && section.getBoundingClientRect().top <= readingLine) active = chapter;
+      let active = sections[0].id;
+      for (const { id } of sections) {
+        const section = document.getElementById('activity-' + id);
+        if (section && section.getBoundingClientRect().top <= readingLine) active = id;
       }
       if (window.scrollY > 0 && window.scrollY + window.innerHeight >= document.documentElement.scrollHeight - 4) {
-        active = chapters[chapters.length - 1];
+        active = sections.at(-1).id;
       }
-      setVisibleChapter(active);
+      setVisibleSection(active);
     }
     function update() {
       if (!frame) frame = requestAnimationFrame(measure);
     }
     update();
+    const layout = new ResizeObserver(update);
+    layout.observe(document.getElementById('workbench'));
     window.addEventListener('scroll', update, { passive: true });
     window.addEventListener('resize', update);
     return () => {
       cancelAnimationFrame(frame);
+      layout.disconnect();
       window.removeEventListener('scroll', update);
       window.removeEventListener('resize', update);
     };
-  }, [followScroll]);
-
-  function placeDirectory() {
-    const anchor = button.current.getBoundingClientRect();
-    popover.current.style.setProperty('--directory-top', anchor.bottom + 9 + 'px');
-    popover.current.style.setProperty('--directory-right', Math.max(12, window.innerWidth - anchor.right) + 'px');
-  }
-
-  useEffect(() => {
-    if (!open) return;
-    window.addEventListener('resize', placeDirectory);
-    return () => window.removeEventListener('resize', placeDirectory);
-  }, [open]);
+  }, []);
 
   function openSection(event, section) {
     if (event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) return;
     event.preventDefault();
-    popover.current.hidePopover();
+    if (mobile && directory.current.matches(':popover-open')) directory.current.hidePopover();
     navigate(section);
   }
 
   return <>
-    <button ref={button} type="button" className="button directory-trigger" popoverTarget={id}
-      aria-controls={id} aria-expanded={open} aria-label={'活动目录，当前' + current.label}>
-      <List size={18} aria-hidden="true" /><span>目录</span><span className="directory-location">{current.label}</span>
-      <ChevronDown size={15} aria-hidden="true" />
-    </button>
-    <nav ref={popover} id={id} popover="auto" className="chapter-directory" aria-label="活动目录"
-      onBeforeToggle={event => { if (event.newState === 'open') placeDirectory(); }}
-      onToggle={event => setOpen(event.newState === 'open')}>
-      {chapters.map(({ id: chapterId, label, icon: Icon, subsections }) => <div key={chapterId}>
-        <a href={'#/' + chapterId} aria-current={current.id === chapterId ? 'location' : undefined}
-          onClick={event => openSection(event, chapterId)}><Icon size={18} aria-hidden="true" />{label}</a>
-        {subsections?.map(section => <a className="directory-subsection" key={section.id} href={'#/' + section.id}
-          onClick={event => openSection(event, section.id)}>{section.label}</a>)}
-      </div>)}
+    <nav ref={directory} id={id} popover={mobile ? 'auto' : undefined} className="chapter-directory" aria-label="活动目录">
+      <div className="directory-heading">
+        <h2>活动目录</h2>
+        {mobile && <button type="button" className="icon-button" aria-label="关闭活动目录" popoverTarget={id} popoverTargetAction="hide">
+          <X size={18} aria-hidden="true" />
+        </button>}
+      </div>
+      <div className="directory-links">
+        {chapters.map(({ id: chapterId, label, icon: Icon, subsections }) => <div key={chapterId}>
+          <a href={'#/' + chapterId} aria-current={current === chapterId ? 'location' : undefined}
+            data-active-group={subsections?.some(section => section.id === current) || undefined}
+            onClick={event => openSection(event, chapterId)}><Icon size={18} aria-hidden="true" />{label}</a>
+          {subsections?.map(section => <a className="directory-subsection" key={section.id} href={'#/' + section.id}
+            aria-current={current === section.id ? 'location' : undefined}
+            onClick={event => openSection(event, section.id)}>{section.label}</a>)}
+        </div>)}
+      </div>
     </nav>
+    {mobile && <nav className="mobile-activity-nav" aria-label="手机工作台导航">
+      <a href="#/overview" aria-current={current === 'overview' ? 'location' : undefined} onClick={event => openSection(event, 'overview')}>
+        <Home size={20} aria-hidden="true" /><span>概况</span>
+      </a>
+      <button type="button" className="mobile-nav-menu" aria-label="活动目录" popoverTarget={id}>
+        <List size={21} aria-hidden="true" /><span>目录</span>
+      </button>
+      <a href="#/live" aria-current={current === 'live' ? 'location' : undefined} onClick={event => openSection(event, 'live')}>
+        <Monitor size={20} aria-hidden="true" /><span>现场</span>
+      </a>
+      <button type="button" aria-label="切换 Agent 工作台" aria-haspopup="dialog" aria-expanded={agentOpen} onClick={toggleAgent}>
+        <Sparkles size={20} aria-hidden="true" /><span>Agent</span>
+      </button>
+    </nav>}
   </>;
 }

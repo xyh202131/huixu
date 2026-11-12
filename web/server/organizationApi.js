@@ -1,9 +1,7 @@
 import { isLocalRequest, sendJson } from './localApi.js';
-import { readModelConfig } from './modelProvider.js';
 import { organizeSources } from './organizeSources.js';
 
-export function createOrganizationHandler(env, memory) {
-  const config = readModelConfig(env);
+export function createOrganizationHandler(getModelConfig, memory) {
   const running = new Map();
 
   return async (request, response) => {
@@ -22,10 +20,10 @@ export function createOrganizationHandler(env, memory) {
         return sendJson(response, 200, { ...state, status });
       }
       if (review && !review.failed) return sendJson(response, 200, { ...state, status: 'ready' });
-      if (!config) return sendJson(response, 503, { error: '模型尚未配置，当前资料已建立本机索引。' });
-
       let job = running.get(eventId);
       if (job?.revision !== scope.revision) {
+        const config = getModelConfig();
+        if (!config) return sendJson(response, 503, { error: '资料已建立本机索引。请在右上角配置模型后重试整理。' });
         const snapshot = memory.organizationInput(eventId, scope);
         const isCurrent = () => memory.organizationScope(eventId).revision === scope.revision;
         const previous = job?.promise;

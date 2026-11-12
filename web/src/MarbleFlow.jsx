@@ -2,6 +2,7 @@ import { useEffect, useRef } from 'react';
 
 const textures = { ice: '/marble-ice.png', spectrum: '/marble-spectrum.png' };
 const frameInterval = 1000 / 30;
+const flowCycleSeconds = 18;
 
 const vertexSource = `
   attribute vec2 position;
@@ -119,7 +120,7 @@ function createRenderer(canvas, image, strength) {
       gl.uniform2f(origin, (1 - visibleX) * anchorX, (1 - visibleY) * anchorY);
     },
     draw(seconds) {
-      gl.uniform1f(phase, (seconds % 24) * 2 * Math.PI / 24);
+      gl.uniform1f(phase, (seconds % flowCycleSeconds) * 2 * Math.PI / flowCycleSeconds);
       gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
     },
     dispose,

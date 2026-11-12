@@ -1,11 +1,13 @@
 import { cloneElement, useEffect, useId, useLayoutEffect, useRef, useState } from 'react';
 import { AlertCircle, CheckCircle2, Info, X } from 'lucide-react';
 
+export const mobileLayoutQuery = '(max-width: 760px), (max-width: 1023px) and (pointer: coarse)';
+
 export function MenuIcon() {
   return <span className="menu-icon" aria-hidden="true"><i /><i /><i /></span>;
 }
 
-export function Dialog({ title, close, variant = 'modal', className = '', footer, children }) {
+export function Dialog({ title, close, variant = 'modal', className = '', fullOnMobile = false, footer, children }) {
   const element = useRef(null);
   const closeButton = useRef(null);
   const latestClose = useRef(close);
@@ -13,9 +15,36 @@ export function Dialog({ title, close, variant = 'modal', className = '', footer
   useLayoutEffect(() => { latestClose.current = close; }, [close]);
 
   useLayoutEffect(() => {
+    const viewport = window.visualViewport;
+    if (!fullOnMobile || !viewport) return;
+    const dialog = element.current;
+    const mobile = matchMedia(mobileLayoutQuery);
+    function fitViewport() {
+      if (!mobile.matches || viewport.scale !== 1) {
+        dialog.style.removeProperty('--sheet-height');
+        dialog.style.removeProperty('--sheet-bottom');
+        return;
+      }
+      // 键盘弹出时按可见区域定位，输入和发送按钮一起留在键盘上方。
+      const bottom = Math.max(0, window.innerHeight - viewport.height - viewport.offsetTop);
+      dialog.style.setProperty('--sheet-height', `${viewport.height}px`);
+      dialog.style.setProperty('--sheet-bottom', `${bottom}px`);
+    }
+    fitViewport();
+    viewport.addEventListener('resize', fitViewport);
+    viewport.addEventListener('scroll', fitViewport);
+    mobile.addEventListener('change', fitViewport);
+    return () => {
+      viewport.removeEventListener('resize', fitViewport);
+      viewport.removeEventListener('scroll', fitViewport);
+      mobile.removeEventListener('change', fitViewport);
+    };
+  }, [fullOnMobile]);
+
+  useLayoutEffect(() => {
     const dialog = element.current;
     const trigger = document.activeElement;
-    const mobile = matchMedia('(max-width: 760px)');
+    const mobile = matchMedia(mobileLayoutQuery);
     const dismiss = () => latestClose.current();
     const isDrawer = variant === 'drawer';
 
@@ -53,7 +82,7 @@ export function Dialog({ title, close, variant = 'modal', className = '', footer
     };
   }, [variant]);
 
-  return <dialog ref={element} className={`dialog ${variant} ${className}`} aria-labelledby={titleId}
+  return <dialog ref={element} className={`dialog ${variant} ${className}${fullOnMobile ? ' mobile-fullscreen' : ''}`} aria-labelledby={titleId}
     onCancel={event => { event.preventDefault(); close(); }}
     onClick={event => {
       if (variant !== 'modal' && event.target === event.currentTarget) close();
