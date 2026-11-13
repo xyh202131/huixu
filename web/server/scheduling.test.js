@@ -52,6 +52,21 @@ test('会场就绪与嘉宾可用时间无法同时满足时说明阻碍', () =>
   assert.ok(c.issues.includes('嘉宾可用时段为 14:00–14:55'));
 });
 
+test('Agent 所选方案在进入变更单时失效仍可查看冲突', () => {
+  const [event] = initialEvents();
+  const session = event.agenda.at(-1);
+  const request = { room: 'B', start: session.start };
+  const selected = analyzeMove(event, session, request).alternatives[0].candidate;
+  event.rooms.find(room => room.id === selected.room).ready = '14:25';
+  const change = makeMoveChange(event, session, request, 'Agent 演练', selected);
+  event.change = change;
+  assert.equal(change.preferredCandidate, selected);
+  assert.ok(change.candidates.includes(selected));
+  assert.ok(change.candidates.some(candidate => candidate.start === '14:25' && !checkCandidate(event, change, candidate).length));
+  assert.match(checkCandidate(event, change, selected).join('、'), /布置完成时间为 14:25/);
+  assert.equal(publishChange(event, selected, false, changeReviewKey(event, change, selected)), event);
+});
+
 test('改时检查人员占用、转场、未结束的现场环节和原时长', () => {
   const [event] = initialEvents();
   const earlier = event.agenda[2];

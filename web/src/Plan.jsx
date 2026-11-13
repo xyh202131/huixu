@@ -7,7 +7,7 @@ import { ProjectMemory } from './ProjectMemory';
 import { ImportReview, OrganizedPlan } from './ImportReview';
 import { checkCandidate, makeChange, money, moveCandidate, participantCount, roomLabel, timeRange } from './model';
 import { changeReviewKey, describeChangeImpact } from './changeImpact';
-import { analyzeMove, checkinPoint } from './scheduling';
+import { analyzeMove, checkinPoint, sameCandidate } from './scheduling';
 
 export function Sources({ event, readOnly, update, notify, navigate, importFiles, importRun, memoryEvidenceId, openImport, organize, organizationRun, sourceIssueId }) {
   const [selectedIssue, setSelectedIssue] = useState(sourceIssueId);
@@ -55,12 +55,13 @@ export function Sources({ event, readOnly, update, notify, navigate, importFiles
   </>;
 }
 
-export function Schedule({ event, readOnly, openChange, update, notify }) {
+export function Schedule({ event, readOnly, openChange, update, notify, navigate }) {
   const [room, setRoom] = useState('全部');
   const [editing, setEditing] = useState(null);
   const [problem, setProblem] = useState('');
   const [dragRoom, setDragRoom] = useState('');
-  const sessions = [...event.agenda].sort((a, b) => a.start.localeCompare(b.start)).filter(item => room === '全部' || roomLabel(item.room) === room);
+  const agenda = [...event.agenda].sort((a, b) => a.start.localeCompare(b.start));
+  const sessions = agenda.filter(item => room === '全部' || roomLabel(item.room) === room);
   function createProposal(item, target, start) {
     if (target === item.room && start === item.start) {
       setProblem('请选择新的会场或时间。');
@@ -81,25 +82,36 @@ export function Schedule({ event, readOnly, openChange, update, notify }) {
       <OrganizedPlan key={event.organizedPlan.id} plan={event.organizedPlan} update={update} notify={notify} />
     </div>}
     <Panel title="会场安排">
-      <div className="room-grid">{event.rooms.map(item => <div className={'room' + (dragRoom === item.id ? ' dragging' : '')} key={item.id}
-        onDragOver={e => { if (!readOnly) { e.preventDefault(); setDragRoom(item.id); } }} onDragLeave={e => { if (!e.currentTarget.contains(e.relatedTarget)) setDragRoom(''); }} onDrop={e => {
-          if (readOnly) return;
-          e.preventDefault();
-          setDragRoom('');
-          const session = event.agenda.find(entry => entry.id === e.dataTransfer.getData('text/plain'));
-          if (session) createProposal(session, item.id, session.start);
-        }}>
-        <MapPin size={21} /><strong>{roomLabel(item.id)}</strong><span>{item.capacity} 个名额 · {item.equipment.join('、')}</span>
-        {!readOnly && <small>拖动下方环节到这里换厅</small>}
-      </div>)}</div>
+      <div className="room-grid">{event.rooms.map(item => {
+        const label = roomLabel(item.id);
+        const scheduled = agenda.filter(session => session.room === item.id);
+        const next = scheduled.find(session => !event.actual[session.id]?.started);
+        return <button type="button" className={'room schedule-room' + (dragRoom === item.id ? ' dragging' : '')} key={item.id}
+          aria-pressed={room === label} onClick={() => setRoom(room === label ? '全部' : label)}
+          onDragOver={e => { if (!readOnly) { e.preventDefault(); setDragRoom(item.id); } }} onDragLeave={e => { if (!e.currentTarget.contains(e.relatedTarget)) setDragRoom(''); }} onDrop={e => {
+            if (readOnly) return;
+            e.preventDefault();
+            setDragRoom('');
+            const session = event.agenda.find(entry => entry.id === e.dataTransfer.getData('text/plain'));
+            if (session) createProposal(session, item.id, session.start);
+          }}>
+          <MapPin size={20} aria-hidden="true" /><strong>{label}</strong>
+          <span>{item.capacity} 个名额 · {scheduled.length} 个环节</span>
+          {item.equipment.length > 0 && <span>{item.equipment.join('、')}</span>}
+          {next && <span className="schedule-room-next">{next.start} · {next.title} · {participantCount(event, next.id)} 人已确认</span>}
+          {!readOnly && <small>拖动下方环节到这里换厅</small>}
+        </button>;
+      })}</div>
     </Panel>
     <Panel title="活动议程" action={<Tabs label="按会场筛选" items={['全部', ...event.rooms.map(item => roomLabel(item.id))]} value={room} onChange={setRoom} />}>
       {problem && !editing && <Notice tone="warning" announce>{problem}</Notice>}
       <Table headers={['时间', '环节', '会场', '嘉宾', '确认报名', ...(readOnly ? [] : ['操作'])]}>
         {sessions.map(item => {
           const confirmedTime = event.issues.find(issue => issue.sessionId === item.id)?.resolved;
+          const released = event.history.find(change => change.before.id === item.id);
           return <tr key={item.id} draggable={!readOnly} onDragStart={e => { e.dataTransfer.setData('text/plain', item.id); e.dataTransfer.effectAllowed = 'move'; }} onDragEnd={() => setDragRoom('')}>
             <td className="tabular">{timeRange(item)}</td><td><strong>{item.title}</strong>
+              {released && <div><LinkButton onClick={() => navigate(`change/released/${released.id}`)}>变更 v{released.version}</LinkButton></div>}
               {confirmedTime && confirmedTime !== item.start && <small className="field-note">资料草稿建议 {confirmedTime}</small>}</td>
             <td>{roomLabel(item.room)}</td><td>{item.guest}</td><td>{participantCount(event, item.id)} 人</td>
             {!readOnly && <td><button className="button small" aria-haspopup="dialog" onClick={() => { setProblem(''); setEditing(item); }}>调整</button></td>}
@@ -186,10 +198,11 @@ function ChangeNotices({ impact }) {
 function ActiveChange({ event, readOnly, publish, refreshMoveChange }) {
   const change = event.change;
   const choices = change.candidates.map(candidate => ({ candidate, issues: checkCandidate(event, change, candidate) }));
-  const [selection, setSelection] = useState(() => Math.max(0, choices.findIndex(item => item.issues.length === 0)));
+  const [selectedCandidate, setSelectedCandidate] = useState(change.preferredCandidate);
+  const choice = choices.find(({ candidate }) => sameCandidate(candidate, selectedCandidate))
+    ?? choices.find(item => item.issues.length === 0) ?? choices[0];
   const [confirmation, setConfirmation] = useState(null);
   const [publishProblem, setPublishProblem] = useState('');
-  const choice = choices[selection];
   const count = participantCount(event, change.sessionId);
   const impact = choice && describeChangeImpact(event, change, choice.candidate);
   const audienceCount = impact?.notice.recipients.length ?? 0;
@@ -220,11 +233,11 @@ function ActiveChange({ event, readOnly, publish, refreshMoveChange }) {
           {hasNewAlternatives ? '已找到新的可行时段，请重新搜索备选后核对。'
             : `${timeRange(analysis.window)} 的搜索范围内暂无可行方案。请核对容量、设备或人员时间后重新分析。`}
         </Notice>}
-        <div className="selection-list">{choices.map(({ candidate, issues }, index) => <button key={candidate.room + candidate.start}
-          aria-pressed={index === selection} onClick={() => setSelection(index)}>
+        <div className="selection-list">{choices.map(({ candidate, issues }, index) => <button key={`${candidate.room}/${candidate.start}/${candidate.end}`}
+          aria-pressed={candidate === choice?.candidate} onClick={() => setSelectedCandidate(candidate)}>
           <span className="radio-mark" aria-hidden="true" /><strong>{roomLabel(candidate.room)}</strong>
           <Badge tone={issues.length ? 'amber' : 'success'}>{issues.some(issue => issue.startsWith('超出')) ? '容量不足' : issues.length ? '存在冲突' : '校验通过'}</Badge>
-          <span className="choice-note">{change.moveRequest && (index === 0 ? '原请求 · ' : '备选 · ')}{timeRange(candidate)} · {event.rooms.find(room => room.id === candidate.room)?.capacity ?? '待确认'} 个名额</span>
+          <span className="choice-note">{change.moveRequest && (index === 0 ? '原请求 · ' : issues.length ? '待核对 · ' : '备选 · ')}{timeRange(candidate)} · {event.rooms.find(room => room.id === candidate.room)?.capacity ?? '待确认'} 个名额</span>
         </button>)}</div>
         {!choice && <Empty>没有可用候选。请确认场地和资源后重新校验。</Empty>}
         {choice?.issues.length > 0 && <Notice tone="warning" announce>{choice.issues.join(' · ')}</Notice>}
@@ -261,20 +274,25 @@ function ActiveChange({ event, readOnly, publish, refreshMoveChange }) {
   </>;
 }
 
-export function ChangePage({ event, readOnly, publish, refreshMoveChange, navigate, activateChange }) {
-  const latest = event.history[0];
+export function ChangePage({ event, readOnly, publish, refreshMoveChange, navigate, activateChange, releasedChangeId }) {
+  const selectedRelease = event.history.find(change => change.id === releasedChangeId);
+  const latest = selectedRelease ?? event.history[0];
+  const showDraft = event.change && !selectedRelease;
   return <>
     <PageHead heading="h3" title="变更单" description={readOnly ? '比较候选方案，查看发布影响和通知预览。' : '核对影响、比较方案，再统一发布。'} />
-    {event.change ? <ActiveChange key={event.change.id} event={event} readOnly={readOnly} publish={publish} refreshMoveChange={refreshMoveChange} /> : <Panel title={latest ? '最近发布' : '待发布变更'}>
+    {showDraft ? <ActiveChange key={event.change.id} event={event} readOnly={readOnly} publish={publish} refreshMoveChange={refreshMoveChange} /> : <Panel title={selectedRelease ? '发布记录' : latest ? '最近发布' : '待发布变更'}>
       {latest ? <>
         <Notice tone="success">{latest.title}已发布 · v{latest.version} · {latest.notified ? '已记录演练通知' : '仅发布安排'}</Notice>
         <ImpactTable before={latest.before} after={latest.after} impact={latest.impact} />
-        <div className="actions publish-actions"><LinkButton onClick={() => navigate('live')}>查看现场看板</LinkButton></div>
+        <div className="actions publish-actions">
+          <LinkButton onClick={() => navigate('live')}>查看现场看板</LinkButton>
+          {selectedRelease && event.change && <LinkButton onClick={() => navigate('change')}>返回待发布变更单</LinkButton>}
+        </div>
       </> : <Empty>{readOnly ? '暂无待发布的调整。' : '当前没有待发布的调整，可从议程或现场创建。'}</Empty>}
     </Panel>}
-    {!event.change && latest?.impact && <AffectedPeople impact={latest.impact} />}
-    {!event.change && latest?.notified && latest.impact && <ChangeNotices impact={latest.impact} />}
-    {!readOnly && event.draftChanges?.length > 0 && <Panel title="其他待评估变更">
+    {!showDraft && latest?.impact && <AffectedPeople impact={latest.impact} />}
+    {!showDraft && latest?.notified && latest.impact && <ChangeNotices impact={latest.impact} />}
+    {!selectedRelease && !readOnly && event.draftChanges?.length > 0 && <Panel title="其他待评估变更">
       <div className="selection-list">{event.draftChanges.map(change => <button key={change.id} onClick={() => activateChange(change)}>{change.title}<span className="muted">{change.reason}</span></button>)}</div>
     </Panel>}
   </>;

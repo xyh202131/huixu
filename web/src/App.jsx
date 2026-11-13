@@ -253,7 +253,8 @@ function Workbench({ route, auth, useStoredEvents }) {
       const change = current.change;
       const session = current.agenda.find(item => item.id === change?.sessionId);
       if (!session || !change.moveRequest) return current;
-      return { ...current, change: makeMoveChange(current, session, change.moveRequest, change.reason) };
+      const refreshed = makeMoveChange(current, session, change.moveRequest, change.reason);
+      return { ...current, change: { ...refreshed, id: change.id } };
     });
   }
   async function organize(eventId, run = true) {
@@ -275,17 +276,32 @@ function Workbench({ route, auth, useStoredEvents }) {
   async function importFiles(eventId, files, agentAccess) {
     if (!files.length || importingEvents.current.has(eventId)) return;
     importingEvents.current.add(eventId);
-    let progress = { pending: true, total: files.length, done: 0, indexed: 0, duplicates: 0, errors: [] };
+    let progress = {
+      pending: true, total: files.length, done: 0, indexed: 0, duplicates: 0, errors: [],
+      files: files.map((file, index) => ({ name: file.name, state: index === 0 ? '处理中' : '等待处理' })),
+    };
     setImportRuns(current => ({ ...current, [eventId]: progress }));
     try {
-      for (const file of files) {
+      for (const [index, file] of files.entries()) {
         let result;
+        let outcome;
         try { result = await importSource(eventId, file, agentAccess); } catch (error) {
+          outcome = { state: '导入失败', note: error.message, tone: 'rose' };
           progress = { ...progress, errors: [...progress.errors, { name: file.name, reason: error.message }] };
+        }
+        if (!outcome) {
+          const { source, duplicate } = result;
+          const tone = duplicate ? 'neutral' : source.state === '已索引' ? 'success' : 'amber';
+          outcome = { state: duplicate ? '重复文件' : source.state, note: source.note, tone };
         }
         progress = { ...progress, done: progress.done + 1,
           indexed: progress.indexed + Number(Boolean(result?.source?.chunkCount && !result.duplicate)),
           duplicates: progress.duplicates + Number(Boolean(result?.duplicate)),
+          files: progress.files.map((item, position) => {
+            if (position === index) return { ...item, ...outcome };
+            if (position === index + 1) return { ...item, state: '处理中' };
+            return item;
+          }),
         };
         const currentProgress = progress;
         setImportRuns(current => ({ ...current, [eventId]: currentProgress }));
@@ -354,7 +370,7 @@ function Workbench({ route, auth, useStoredEvents }) {
     setAgentRun(current => current?.pending ? { ...current, pending: false, stopped: true } : current);
   }
 
-  function reviewProposal() {
+  function reviewProposal(candidate) {
     const proposal = agentRun.proposal;
     if (proposal.kind === 'event') {
       setDraft({ text: agentRun.question, proposal });
@@ -367,13 +383,17 @@ function Workbench({ route, auth, useStoredEvents }) {
       setAgentRun(current => ({ ...current, proposal: null, error: '议程已更新，请重新向 Agent 提出调整。' }));
       return;
     }
-    setAgentRun(current => ({ ...current, proposal: null }));
-    openChange(makeMoveChange(event, session, { room: proposal.room, start: proposal.start, closedRoom: proposal.closedRoom, earliest: proposal.earliest }, 'Agent 提出的调整建议'));
+    const change = makeMoveChange(event, session, {
+      room: proposal.room, start: proposal.start, closedRoom: proposal.closedRoom, earliest: proposal.earliest,
+    }, 'Agent 提出的调整建议', candidate);
+    setAgentRun(current => ({ ...current, proposal: null, reviewChangeId: change.id }));
+    openChange(change);
   }
 
   const sourceIssueId = path === 'sources' && routeEventId === 'issue' ? role : undefined;
   const props = { event, readOnly, mobile, update, navigate, notify, ask, openChange, publish, refreshMoveChange, copy, activateChange, openImport, importFiles, sourceIssueId,
     importRun: importRuns[event?.id], memoryEvidenceId: path === 'sources' && routeEventId !== 'issue' ? routeEventId : undefined,
+    releasedChangeId: path === 'change' && routeEventId === 'released' ? role : undefined,
     organize, organizationRun: organizationRuns[event?.id] };
   if ((publicRoute || externalRoute) && !showPublic && !showExternal) return <main className="unavailable-link">
     <h1>活动链接不可用</h1><p className="muted">请向活动负责人索取当前链接。</p>
@@ -413,7 +433,7 @@ function Workbench({ route, auth, useStoredEvents }) {
           <AgentWorkspace key={event.id} id={agentId} event={event} account={account} docked={dockAgent} open={agentOpen} close={closeAgent}
             run={agentRun?.eventId === event.id ? agentRun : null} ask={ask} stop={stopAgent} askLocal={askLocal}
             openSettings={() => showModal('settings')} openAccount={() => showModal('account')} reviewProposal={reviewProposal}
-            openSource={chunkId => navigate(`sources/${chunkId}`)} />
+            openSource={chunkId => navigate(`sources/${chunkId}`)} openReviewedChange={id => navigate(id ? `change/released/${id}` : 'change')} />
         </div>
       </div>}
     {modal === 'create' && <CreateEvent draft={draft} create={create} close={() => setModal('')} />}

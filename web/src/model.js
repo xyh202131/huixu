@@ -1,5 +1,5 @@
 import { changeReviewKey, describeChangeImpact, sessionPosts } from './changeImpact.js';
-import { analyzeMove, checkCandidate, checkinPoint, clock, minutes, moveCandidate, roomLabel, sessionPeople, timeRange } from './scheduling.js';
+import { analyzeMove, checkCandidate, checkinPoint, clock, minutes, moveCandidate, roomLabel, sameCandidate, sessionPeople, timeRange } from './scheduling.js';
 
 export { checkCandidate, clock, minutes, moveCandidate, roomLabel, timeRange } from './scheduling.js';
 
@@ -103,17 +103,26 @@ export function participantCount(event, sessionId) {
   return event.attendees.filter(person => person.status === '已确认' && (!sessionId || person.sessionId === sessionId)).length;
 }
 
+export function liveAgenda(event, sessions) {
+  const current = sessions.find(item => event.actual[item.id]?.started && !event.actual[item.id]?.ended);
+  const next = sessions.find(item => !event.actual[item.id]?.started);
+  return { current, next };
+}
+
 export function makeChange(session, candidates, reason, closedRoom = '', earliest = '') {
   return { id: uid(), title: session.title + '调整', sessionId: session.id, before: { ...session },
     reason, candidates, closedRoom, earliest };
 }
 
-export function makeMoveChange(event, session, request, reason) {
+export function makeMoveChange(event, session, request, reason, preferredCandidate) {
   const existing = event.change?.sessionId === session.id ? event.change : null;
   const moveRequest = { ...request, closedRoom: existing?.closedRoom || request.closedRoom, earliest: existing?.earliest || request.earliest };
   const analysis = analyzeMove(event, session, moveRequest);
   const candidates = [analysis.requested.candidate, ...analysis.alternatives.map(option => option.candidate)];
-  return { ...makeChange(session, candidates, reason, moveRequest.closedRoom, moveRequest.earliest), moveRequest };
+  if (preferredCandidate && !candidates.some(candidate => sameCandidate(candidate, preferredCandidate))) {
+    candidates.push(preferredCandidate);
+  }
+  return { ...makeChange(session, candidates, reason, moveRequest.closedRoom, moveRequest.earliest), moveRequest, preferredCandidate };
 }
 
 export function incidentChange(event, kind, sessionId) {
@@ -131,7 +140,7 @@ export function incidentChange(event, kind, sessionId) {
 
 export function publishChange(event, candidate, recordMessage, reviewed) {
   const change = event.change;
-  if (!change || !change.candidates.some(item => item.room === candidate.room && item.start === candidate.start && item.end === candidate.end)) return event;
+  if (!change || !change.candidates.some(item => sameCandidate(item, candidate))) return event;
   if (checkCandidate(event, change, candidate).length) return event;
   const impact = describeChangeImpact(event, change, candidate);
   if (changeReviewKey(event, change, candidate, impact) !== reviewed) return event;

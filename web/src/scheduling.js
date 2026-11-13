@@ -22,6 +22,10 @@ export function checkinPoint(session) {
   return roomLabel(session.room) + '门口签到';
 }
 
+export function sameCandidate(candidate, other) {
+  return Boolean(other && candidate.room === other.room && candidate.start === other.start && candidate.end === other.end);
+}
+
 export function moveCandidate(session, room, start) {
   const duration = minutes(session.end) - minutes(session.start);
   return { room, start, end: clock(minutes(start) + duration) };

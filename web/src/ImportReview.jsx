@@ -1,6 +1,6 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { ArrowRight, Check, FileText, Sparkles } from 'lucide-react';
-import { Badge, Empty, Panel } from './components';
+import { Badge, Empty, Panel, Tabs } from './components';
 import { Notice, Popconfirm } from './interactions';
 import { organizationRequest } from './memoryClient';
 import { uid } from './model';
@@ -27,6 +27,8 @@ export function ImportReview({ event, update, notify, navigate, organize, organi
   const [snapshot, setSnapshot] = useState(null);
   const [problem, setProblem] = useState('');
   const [generating, setGenerating] = useState(false);
+  const [pendingOnly, setPendingOnly] = useState(false);
+  const conflictHeading = useRef(null);
   const refreshToken = organizationRun?.token;
 
   useEffect(() => {
@@ -53,6 +55,7 @@ export function ImportReview({ event, update, notify, navigate, organize, organi
   const choices = review ? reviewChoices(review, event.organizationChoices) : {};
   const conflicts = review?.facts.filter(fact => fact.options.length > 1) ?? [];
   const unresolved = conflicts.filter(fact => !fact.options.some(option => option.value === choices[fact.key]));
+  const visibleConflicts = pendingOnly ? unresolved : conflicts;
   const plan = review && planFromReview(review, choices);
   const missing = plan ? missingPlanFields(plan, unresolved) : [];
   const error = problem || organizationRun?.error;
@@ -109,7 +112,12 @@ export function ImportReview({ event, update, notify, navigate, organize, organi
             <ReviewMetric count={unresolved.length} label="待确认冲突" pending={unresolved.length > 0} />
             <ReviewMetric count={missing.length} label="缺失项" pending={missing.length > 0} />
           </dl>
-          {conflicts.map(fact => <section className="import-conflict" key={fact.key} aria-label={factLabel(fact)}>
+          {conflicts.length > 0 && <div className="import-conflict-toolbar">
+            <h3 ref={conflictHeading} tabIndex={-1}>冲突核对</h3>
+            <Tabs label="筛选资料冲突" items={['全部冲突', '仅待确认']} value={pendingOnly ? '仅待确认' : '全部冲突'} onChange={value => setPendingOnly(value === '仅待确认')} />
+          </div>}
+          {pendingOnly && conflicts.length > 0 && !unresolved.length && <Empty>全部冲突已确认，可查看已采用的原文。</Empty>}
+          {visibleConflicts.map(fact => <section className="import-conflict" key={fact.key} aria-label={factLabel(fact)}>
             <div className="import-conflict-head"><h3>{factLabel(fact)}</h3>
               <Badge tone={choices[fact.key] ? 'success' : 'amber'}>{choices[fact.key] ? '已确认' : '待确认'}</Badge>
             </div>
@@ -119,7 +127,10 @@ export function ImportReview({ event, update, notify, navigate, organize, organi
                 <strong className="import-option-value">{option.value}</strong>
                 <div>{option.evidence.map(evidence => <Evidence key={evidence.chunkId} evidence={evidence} navigate={navigate} />)}</div>
                 <button type="button" className={adopted ? 'button small primary' : 'button small'}
-                  aria-pressed={adopted} onClick={() => choose(fact, option.value)}>
+                  aria-pressed={adopted} onClick={() => {
+                    if (pendingOnly) conflictHeading.current?.focus({ preventScroll: true });
+                    choose(fact, option.value);
+                  }}>
                   {adopted && <Check size={16} aria-hidden="true" />}{adopted ? '已采用' : '采用'} {option.value}
                 </button>
               </article>;
