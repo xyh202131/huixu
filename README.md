@@ -37,7 +37,9 @@ npm.cmd run dev
 
 自定义接口支持 OpenAI Chat Completions 和 Anthropic Messages，可填服务基址或完整调用地址，以及模型名称和按需填写的 API Key。支持 HTTPS 或本机 HTTP。Anthropic Messages 可选择 `x-api-key` 或 `Authorization: Bearer`。连接测试使用示例请求核对工具调用与结果回传。
 
-工作台保存一个当前模型，后续 Agent 对话和资料整理即时生效。API Key 保存在本机服务的 `model-settings.sqlite`，可用 `HUIXU_MODEL_DB` 指定 Web 根目录之外的文件。已保存的密钥不会回填到界面。已有的 `web/.env.local` 继续作为后备，移除工作台配置后恢复环境变量配置。通过环境变量配置的方式见 [web/.env.example](web/.env.example)。
+模型设置中可分别配置「Agent 对话」和「资料整理」。资料整理默认沿用对话模型，也可单独选择服务商。资料提取测试用虚构议程和海报检查两条冲突时间及对应出处。新整理任务读取当前配置，已完成的结果随资料版本保留。
+
+API Key 保存在本机服务的 `model-settings.sqlite`，可用 `HUIXU_MODEL_DB` 指定 Web 根目录之外的文件。界面显示密钥保存状态。移除独立的资料整理配置后恢复共用对话模型，移除对话配置后使用已有的 `web/.env.local`。环境变量配置方式见 [web/.env.example](web/.env.example)。
 
 工作台的本机开发与预览服务处理 `/api/agent`。模型可以读议程与筹备、预算、报名、现场和发布状态，检索已授权的活动资料，准备活动草稿或提出换厅改时。换厅提议沿用工作台的校验，发布仍需要变更单确认。调用提供商时发送问题、工具所需的业务摘要及获准引用的相关片段。报名名单和资料原件不随活动摘要发送。
 

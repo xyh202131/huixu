@@ -23,7 +23,7 @@ export function createOrganizationHandler(getModelConfig, memory) {
       let job = running.get(eventId);
       if (job?.revision !== scope.revision) {
         const config = getModelConfig();
-        if (!config) return sendJson(response, 503, { error: '资料已建立本机索引。请在右上角配置模型后重试整理。' });
+        if (!config) return sendJson(response, 503, { error: '资料已建立本机索引。请在右上角配置资料整理或 Agent 对话模型后重试。' });
         const snapshot = memory.organizationInput(eventId, scope);
         const isCurrent = () => memory.organizationScope(eventId).revision === scope.revision;
         const previous = job?.promise;

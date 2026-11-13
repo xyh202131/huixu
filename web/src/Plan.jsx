@@ -1,11 +1,13 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { ArrowRight, ArrowRightLeft, CalendarDays, FileText, MapPin, Monitor, UsersRound } from 'lucide-react';
 import { Badge, Empty, IconTile, LinkButton, PageHead, Panel, Table, Tabs } from './components';
 import { Dialog, Notice } from './interactions';
 import { Select } from './Select';
 import { ProjectMemory } from './ProjectMemory';
 import { ImportReview, OrganizedPlan } from './ImportReview';
-import { changeNotice, checkCandidate, makeChange, money, moveCandidate, participantCount, roomLabel, timeRange } from './model';
+import { checkCandidate, makeChange, money, moveCandidate, participantCount, roomLabel, timeRange } from './model';
+import { changeReviewKey, describeChangeImpact } from './changeImpact';
+import { analyzeMove, checkinPoint } from './scheduling';
 
 export function Sources({ event, readOnly, update, notify, navigate, importFiles, importRun, memoryEvidenceId, openImport, organize, organizationRun, sourceIssueId }) {
   const [selectedIssue, setSelectedIssue] = useState(sourceIssueId);
@@ -128,33 +130,84 @@ function ScheduleCard({ item, title, next }) {
   </div>;
 }
 
-function ImpactTable({ before, after }) {
+function ImpactTable({ before, after, impact }) {
+  const beforeLabel = timeRange(before) + ' · ' + roomLabel(before.room);
+  const afterLabel = timeRange(after) + ' · ' + roomLabel(after.room);
   const rows = [
-    [CalendarDays, '公开议程', timeRange(before) + ' · ' + roomLabel(before.room), timeRange(after) + ' · ' + roomLabel(after.room)],
-    [UsersRound, '嘉宾行程', before.start + ' 进入 ' + roomLabel(before.room), after.start + ' 进入 ' + roomLabel(after.room)],
-    [MapPin, '签到点', roomLabel(before.room) + '门口签到', roomLabel(after.room) + '门口签到'],
-    [UsersRound, '志愿者岗位', roomLabel(before.room) + '引导（2 人）', roomLabel(after.room) + '引导（2 人）'],
-    [FileText, '工作人员台本', before.start + ' 开场引导', after.start + ' 开场引导'],
-    [Monitor, '现场大屏', '显示 ' + roomLabel(before.room) + '议程', '显示 ' + roomLabel(after.room) + '议程'],
+    [CalendarDays, '公开议程', beforeLabel, afterLabel],
+    [UsersRound, '嘉宾行程', beforeLabel, afterLabel],
+    [MapPin, '签到点', impact?.checkin.before ?? checkinPoint(before), impact?.checkin.after ?? checkinPoint(after)],
+    [FileText, '工作人员台本', beforeLabel, afterLabel],
+    [Monitor, '现场大屏', beforeLabel, afterLabel],
   ];
   return <Table headers={['事项', '变更前', '变更后']}>{rows.map(([Icon, label, previous, current]) => <tr key={label}>
     <td><span className="inline-icon"><Icon size={17} />{label}</span></td><td>{previous}</td><td>{current}</td>
   </tr>)}</Table>;
 }
 
-function ActiveChange({ event, readOnly, publish }) {
+function AffectedPeople({ impact }) {
+  const groups = ['已确认', '候补', '待审核'].map(status => ({ status, people: impact.registrations.filter(person => person.status === status) }));
+  return <>
+    <Panel title="受影响报名">
+      <div className="actions compact">{groups.map(({ status, people }) => <Badge key={status}>{status} {people.length} 人</Badge>)}</div>
+      <p className="muted">沿用原分场报名关系，已记录的分场签到 {impact.checkedIn} 人。</p>
+      {impact.registrations.length > 0 && <details className="activity-file-history">
+        <summary>查看受影响名单（{impact.registrations.length} 人）</summary>
+        {groups.filter(group => group.people.length).map(({ status, people }) => <div className="impact-registration-group" key={status}>
+          <strong>{status} · {people.length} 人</strong><p>{people.map(person => person.name).join('、')}</p>
+        </div>)}
+      </details>}
+    </Panel>
+    <Panel title="受影响岗位与人员">
+      <Table headers={['岗位', '负责人', '原安排', '新安排']}>{impact.posts.map(post => <tr key={post.role}>
+        <td>{post.role}</td><td>{post.assignees.join('、') || '待分配'}</td><td>{post.before}</td><td>{post.after}</td>
+      </tr>)}</Table>
+      {impact.people.length ? <ul className="plain-list">{impact.people.map(({ role, name, availability }, index) => <li key={role + name + index}>
+        {role} · {name} · {availability ? '可用 ' + timeRange(availability) : '可用时段待核对'}
+      </li>)}</ul> : <p className="muted">当前环节的人员安排待确认。</p>}
+    </Panel>
+  </>;
+}
+
+function ChangeNotices({ impact }) {
+  const { notice, personnelNotices = [] } = impact;
+  return <Panel title="变更通知">
+    <div className="notice-grid">
+      <div className="recipient"><UsersRound size={21} /><div><span>接收对象</span><strong>{notice.recipients.length} 位已确认观众</strong></div></div>
+      <div><p className="muted">通知预览（演练）</p><div className="message-preview">{notice.body}</div></div>
+    </div>
+    {personnelNotices.map(({ role, recipients, body }) => <div className="notice-grid impact-registration-group" key={role}>
+      <div className="recipient"><UsersRound size={21} /><div><span>{role} · {recipients.length} 人</span><strong>{recipients.join('、')}</strong></div></div>
+      <div><p className="muted">通知预览（演练）</p><div className="message-preview">{body}</div></div>
+    </div>)}
+  </Panel>;
+}
+
+function ActiveChange({ event, readOnly, publish, refreshMoveChange }) {
   const change = event.change;
   const choices = change.candidates.map(candidate => ({ candidate, issues: checkCandidate(event, change, candidate) }));
   const [selection, setSelection] = useState(() => Math.max(0, choices.findIndex(item => item.issues.length === 0)));
-  const [publishMode, setPublishMode] = useState('');
+  const [confirmation, setConfirmation] = useState(null);
   const [publishProblem, setPublishProblem] = useState('');
   const choice = choices[selection];
   const count = participantCount(event, change.sessionId);
-  const recordsNotice = publishMode === 'notify';
+  const impact = choice && describeChangeImpact(event, change, choice.candidate);
+  const audienceCount = impact?.notice.recipients.length ?? 0;
+  const personnelCount = impact?.personnelNotices.reduce((total, group) => total + group.recipients.length, 0) ?? 0;
+  const unknownAvailability = impact?.people.filter(person => !person.availability).length ?? 0;
+  const reviewed = impact && changeReviewKey(event, change, choice.candidate, impact);
+  const stale = confirmation && confirmation.reviewed !== reviewed;
+  const recordsNotice = confirmation?.mode === 'notify';
   const publishLabel = recordsNotice ? '发布并记录演练通知' : '仅发布';
+  const hasFeasible = choices.some(option => !option.issues.length);
+  const analysis = useMemo(() => {
+    if (hasFeasible || !change.moveRequest) return null;
+    return analyzeMove(event, change.before, change.moveRequest);
+  }, [event, change, hasFeasible]);
+  const hasNewAlternatives = analysis?.alternatives.length > 0;
   function openPublish(mode) {
     setPublishProblem('');
-    setPublishMode(mode);
+    setConfirmation({ mode, reviewed });
   }
   return <>
     <Panel className="change-summary">
@@ -162,56 +215,65 @@ function ActiveChange({ event, readOnly, publish }) {
       <Notice>{change.reason} · {count} 人已确认 · 原安排 {timeRange(change.before)}</Notice>
     </Panel>
     <div className="split change-split">
-      <Panel title="候选方案">
+      <Panel title="候选方案" action={!readOnly && change.moveRequest && <button type="button" className="button small" onClick={refreshMoveChange}>重新搜索备选</button>}>
+        {analysis && <Notice tone="warning" announce>
+          {hasNewAlternatives ? '已找到新的可行时段，请重新搜索备选后核对。'
+            : `${timeRange(analysis.window)} 的搜索范围内暂无可行方案。请核对容量、设备或人员时间后重新分析。`}
+        </Notice>}
         <div className="selection-list">{choices.map(({ candidate, issues }, index) => <button key={candidate.room + candidate.start}
           aria-pressed={index === selection} onClick={() => setSelection(index)}>
           <span className="radio-mark" aria-hidden="true" /><strong>{roomLabel(candidate.room)}</strong>
           <Badge tone={issues.length ? 'amber' : 'success'}>{issues.some(issue => issue.startsWith('超出')) ? '容量不足' : issues.length ? '存在冲突' : '校验通过'}</Badge>
-          <span className="choice-note">{issues.length ? event.rooms.find(room => room.id === candidate.room)?.capacity + ' 个名额 / ' + issues[0] : timeRange(candidate) + ' · ' + event.rooms.find(room => room.id === candidate.room)?.capacity + ' 个名额'}</span>
+          <span className="choice-note">{change.moveRequest && (index === 0 ? '原请求 · ' : '备选 · ')}{timeRange(candidate)} · {event.rooms.find(room => room.id === candidate.room)?.capacity ?? '待确认'} 个名额</span>
         </button>)}</div>
         {!choice && <Empty>没有可用候选。请确认场地和资源后重新校验。</Empty>}
         {choice?.issues.length > 0 && <Notice tone="warning" announce>{choice.issues.join(' · ')}</Notice>}
+        {analysis && !hasNewAlternatives && analysis.blocked.length > 0 && <ul className="plain-list">
+          {analysis.blocked.map(({ candidate, issues }) => <li key={candidate.room}>
+            <strong>{roomLabel(candidate.room)} · {timeRange(candidate)}</strong>　{issues.join('、')}
+          </li>)}
+        </ul>}
         {choice && <div className="schedule-compare"><ScheduleCard item={change.before} title="原安排" /><ArrowRight size={19} /><ScheduleCard item={choice.candidate} title="新安排" next /></div>}
       </Panel>
       <Panel title="发布影响">
-        {choice ? <ImpactTable before={change.before} after={choice.candidate} /> : <Empty>选定方案后查看发布影响。</Empty>}
+        {choice ? <ImpactTable before={change.before} after={choice.candidate} impact={impact} /> : <Empty>选定方案后查看发布影响。</Empty>}
       </Panel>
     </div>
-    {choice && <Panel title="观众通知">
-      <div className="notice-grid">
-        <div className="recipient"><UsersRound size={21} /><div><span>接收对象</span><strong>{count} 位已确认观众</strong></div></div>
-        <div><p className="muted">通知预览（演练）</p><div className="message-preview">{changeNotice(change, choice.candidate)}</div></div>
-      </div>
-    </Panel>}
+    {impact && <AffectedPeople impact={impact} />}
+    {impact && <ChangeNotices impact={impact} />}
     {!readOnly && <div className="actions publish-actions">
       <button className="button" aria-haspopup="dialog" disabled={!choice || choice.issues.length > 0} onClick={() => openPublish('publish')}>仅发布</button>
-      <button className="button primary" aria-haspopup="dialog" disabled={!choice || choice.issues.length > 0} onClick={() => openPublish('notify')}>发布并记录演练通知</button>
+      <button className="button primary" aria-haspopup="dialog" disabled={!choice || choice.issues.length > 0 || !(audienceCount + personnelCount)} onClick={() => openPublish('notify')}>发布并记录演练通知</button>
     </div>}
-    {publishMode && choice && <Dialog title="确认发布变更" close={() => setPublishMode('')} footer={<>
-      <button className="button" type="button" onClick={() => setPublishMode('')}>返回核对</button>
-      <button className="button primary" type="button" disabled={choice.issues.length > 0} onClick={() => {
-        if (!publish(choice.candidate, recordsNotice)) setPublishProblem('校验未通过，请返回核对候选方案。');
+    {confirmation && choice && <Dialog title="确认发布变更" close={() => setConfirmation(null)} footer={<>
+      <button className="button" type="button" onClick={() => setConfirmation(null)}>返回核对</button>
+      <button className="button primary" type="button" disabled={Boolean(stale) || choice.issues.length > 0} onClick={() => {
+        if (!publish(choice.candidate, recordsNotice, confirmation.reviewed)) setPublishProblem('校验未通过，请返回核对候选方案。');
       }}>{publishLabel}</button>
     </>}>
       <p><strong>{change.title}</strong> · {timeRange(choice.candidate)} · {roomLabel(choice.candidate.room)}</p>
-      <Notice tone={choice.issues.length ? 'warning' : 'info'}>{choice.issues.length ? choice.issues.join(' · ') : '公开议程、签到点、执行台本和现场大屏将同步更新。'}</Notice>
-      {recordsNotice && <p className="muted">本次将为 {count} 位已确认观众记录演练通知。</p>}
+      <Notice tone={choice.issues.length ? 'warning' : 'info'}>{choice.issues.length ? choice.issues.join(' · ') : '公开议程、签到点、岗位清单、执行台本和现场大屏将同步更新。'}</Notice>
+      {unknownAvailability > 0 && <Notice tone="warning">有 {unknownAvailability} 位已安排人员未登记可用时段，请核对后确认。</Notice>}
+      {recordsNotice && <p className="muted">本次将为 {audienceCount} 位已确认观众{personnelCount ? `和 ${personnelCount} 位嘉宾或分场引导人员` : ''}记录演练通知。</p>}
+      {stale && <Notice tone="error" announce>报名、人员、签到或发布版本已更新，请返回核对最新影响。</Notice>}
       {publishProblem && <Notice tone="error" announce>{publishProblem}</Notice>}
     </Dialog>}
   </>;
 }
 
-export function ChangePage({ event, readOnly, publish, navigate, activateChange }) {
+export function ChangePage({ event, readOnly, publish, refreshMoveChange, navigate, activateChange }) {
   const latest = event.history[0];
   return <>
     <PageHead heading="h3" title="变更单" description={readOnly ? '比较候选方案，查看发布影响和通知预览。' : '核对影响、比较方案，再统一发布。'} />
-    {event.change ? <ActiveChange key={event.change.id} event={event} readOnly={readOnly} publish={publish} /> : <Panel title={latest ? '最近发布' : '待发布变更'}>
+    {event.change ? <ActiveChange key={event.change.id} event={event} readOnly={readOnly} publish={publish} refreshMoveChange={refreshMoveChange} /> : <Panel title={latest ? '最近发布' : '待发布变更'}>
       {latest ? <>
         <Notice tone="success">{latest.title}已发布 · v{latest.version} · {latest.notified ? '已记录演练通知' : '仅发布安排'}</Notice>
-        <ImpactTable before={latest.before} after={latest.after} />
+        <ImpactTable before={latest.before} after={latest.after} impact={latest.impact} />
         <div className="actions publish-actions"><LinkButton onClick={() => navigate('live')}>查看现场看板</LinkButton></div>
       </> : <Empty>{readOnly ? '暂无待发布的调整。' : '当前没有待发布的调整，可从议程或现场创建。'}</Empty>}
     </Panel>}
+    {!event.change && latest?.impact && <AffectedPeople impact={latest.impact} />}
+    {!event.change && latest?.notified && latest.impact && <ChangeNotices impact={latest.impact} />}
     {!readOnly && event.draftChanges?.length > 0 && <Panel title="其他待评估变更">
       <div className="selection-list">{event.draftChanges.map(change => <button key={change.id} onClick={() => activateChange(change)}>{change.title}<span className="muted">{change.reason}</span></button>)}</div>
     </Panel>}

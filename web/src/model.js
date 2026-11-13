@@ -1,3 +1,8 @@
+import { changeReviewKey, describeChangeImpact, sessionPosts } from './changeImpact.js';
+import { analyzeMove, checkCandidate, checkinPoint, clock, minutes, moveCandidate, roomLabel, sessionPeople, timeRange } from './scheduling.js';
+
+export { checkCandidate, clock, minutes, moveCandidate, roomLabel, timeRange } from './scheduling.js';
+
 export const activityTypes = ['企业培训', '行业论坛', '展览', '市集', '校园活动'];
 export const channels = ['邮件', '日历邀请', '站内公告', '飞书', '企微', '短信'];
 export const materialKinds = ['观众议程', '嘉宾行程', '主持稿', '工作人员台本', '岗位清单'];
@@ -84,10 +89,6 @@ export function loadEvents() {
   return initialEvents();
 }
 
-export function roomLabel(room) {
-  return room ? room + ' 厅' : '待定';
-}
-
 export function dateLabel(date) {
   if (!date) return '日期待定';
   const [, month, day] = date.split('-').map(Number);
@@ -96,20 +97,6 @@ export function dateLabel(date) {
 
 export function money(value) {
   return '¥' + Number(value).toLocaleString('zh-CN');
-}
-
-export function minutes(time) {
-  const [hour, minute] = time.split(':').map(Number);
-  return hour * 60 + minute;
-}
-
-export function clock(value) {
-  const safeValue = Math.max(0, Math.min(1439, value));
-  return String(Math.floor(safeValue / 60)).padStart(2, '0') + ':' + String(safeValue % 60).padStart(2, '0');
-}
-
-export function timeRange(item) {
-  return item.start + '–' + item.end;
 }
 
 export function participantCount(event, sessionId) {
@@ -121,9 +108,12 @@ export function makeChange(session, candidates, reason, closedRoom = '', earlies
     reason, candidates, closedRoom, earliest };
 }
 
-export function moveCandidate(session, room, start) {
-  const duration = minutes(session.end) - minutes(session.start);
-  return { room, start, end: clock(minutes(start) + duration) };
+export function makeMoveChange(event, session, request, reason) {
+  const existing = event.change?.sessionId === session.id ? event.change : null;
+  const moveRequest = { ...request, closedRoom: existing?.closedRoom || request.closedRoom, earliest: existing?.earliest || request.earliest };
+  const analysis = analyzeMove(event, session, moveRequest);
+  const candidates = [analysis.requested.candidate, ...analysis.alternatives.map(option => option.candidate)];
+  return { ...makeChange(session, candidates, reason, moveRequest.closedRoom, moveRequest.earliest), moveRequest };
 }
 
 export function incidentChange(event, kind, sessionId) {
@@ -139,57 +129,30 @@ export function incidentChange(event, kind, sessionId) {
   return makeChange(session, candidates, incidentKinds[kind] + ' · 最早 ' + earliest, '', earliest);
 }
 
-export function checkCandidate(event, change, candidate, confirmedCount = participantCount(event, change.sessionId)) {
-  const room = event.rooms.find(item => item.id === candidate.room);
-  if (!room) return ['会场待确认'];
-  const issues = [];
-  const session = change.before;
-  const current = event.agenda.find(item => item.id === session.id);
-  if (!current || current.start !== session.start || current.end !== session.end || current.room !== session.room) {
-    issues.push('当前安排已更新，请从议程重新提出调整');
-  }
-  if (candidate.start >= candidate.end) issues.push('结束时间须晚于开始时间');
-  if (candidate.room === change.closedRoom) issues.push('会场临时关闭');
-  if (confirmedCount > room.capacity) issues.push('超出 ' + (confirmedCount - room.capacity) + ' 人');
-  const missing = session.equipment.filter(name => !room.equipment.includes(name));
-  if (missing.length) issues.push('缺少' + missing.join('、'));
-  if (candidate.start < room.ready) issues.push('布置完成时间为 ' + room.ready);
-  if (change.earliest && candidate.start < change.earliest) issues.push('最早可开始时间为 ' + change.earliest);
-  for (const other of event.agenda) {
-    if (other.id === session.id) continue;
-    const overlaps = candidate.start < other.end && other.start < candidate.end;
-    if (overlaps && candidate.room === other.room) issues.push('会场与「' + other.title + '」撞场');
-    if (session.guest && session.guest === other.guest) {
-      if (overlaps) issues.push('嘉宾与「' + other.title + '」时间重叠');
-      else if (candidate.room !== other.room) {
-        const gap = Math.max(minutes(candidate.start) - minutes(other.end), minutes(other.start) - minutes(candidate.end));
-        if (gap < 10) issues.push('嘉宾跨厅转场不足 10 分钟');
-      }
-    }
-  }
-  if (event.actual[session.id]?.started) issues.push('环节已开始，请调整后续环节');
-  return issues;
-}
-
-export function changeNotice(change, candidate) {
-  return '【议程变更】' + change.reason + '。' + change.before.title + '调整至' +
-    roomLabel(candidate.room) + '，时间为 ' + timeRange(candidate) + '。请以最新议程为准。';
-}
-
-export function publishChange(event, candidate, recordMessage) {
+export function publishChange(event, candidate, recordMessage, reviewed) {
   const change = event.change;
-  if (!change || checkCandidate(event, change, candidate).length) return event;
+  if (!change || !change.candidates.some(item => item.room === candidate.room && item.start === candidate.start && item.end === candidate.end)) return event;
+  if (checkCandidate(event, change, candidate).length) return event;
+  const impact = describeChangeImpact(event, change, candidate);
+  if (changeReviewKey(event, change, candidate, impact) !== reviewed) return event;
   const version = event.version + 1;
-  const count = participantCount(event, change.sessionId);
-  const message = recordMessage ? {
-    id: change.id, subject: change.title, body: changeNotice(change, candidate), channel: '演练通知',
-    count, date: new Date().toLocaleString('zh-CN'), version,
-  } : null;
+  const count = impact.notice.recipients.length;
+  const messages = [];
+  if (recordMessage) {
+    const metadata = { channel: '演练通知', date: new Date().toLocaleString('zh-CN'), version };
+    if (count) messages.push({ ...metadata, id: change.id, subject: change.title, body: impact.notice.body,
+      recipientIds: impact.notice.recipients.map(person => person.id), count });
+    for (const { role, body, recipients } of impact.personnelNotices) {
+      messages.push({ ...metadata, id: `${change.id}-${role}`, subject: `${change.title} · ${role}`, body,
+        recipientNames: recipients, count: recipients.length });
+    }
+    if (!messages.length) return event;
+  }
   return {
     ...event, version, change: null,
     agenda: event.agenda.map(item => item.id === change.sessionId ? { ...item, ...candidate } : item),
-    history: [{ id: change.id, title: change.title, before: change.before, after: candidate, version, count, notified: Boolean(message) }, ...event.history],
-    messages: message ? [message, ...event.messages] : event.messages,
+    history: [{ id: change.id, title: change.title, before: change.before, after: candidate, impact, version, count, notified: messages.length > 0 }, ...event.history],
+    messages: messages.length ? [...messages, ...event.messages] : event.messages,
   };
 }
 
@@ -205,8 +168,11 @@ export function materialText(event, kind) {
     const time = timeRange(session) + ' · ' + roomLabel(session.room);
     if (kind === '嘉宾行程') return time + '｜' + session.guest + ' · ' + session.title;
     if (kind === '主持稿') return time + '\n各位来宾，接下来是「' + session.title + '」，有请' + session.guest + '。';
-    if (kind === '工作人员台本') return time + '｜' + session.title + '\n核对会场、设备和签到点，准备开场。';
-    if (kind === '岗位清单') return roomLabel(session.room) + ' · ' + session.start + '｜签到、引导、会场联络';
+    if (kind === '工作人员台本') return time + '｜' + session.title + '\n' + checkinPoint(session) + '，核对会场及设备。';
+    if (kind === '岗位清单') {
+      const posts = sessionPosts(sessionPeople(event, session));
+      return `${time}｜${session.title}\n${posts.map(({ role, assignees }) => role + ' · ' + (assignees.join('、') || '待分配')).join('\n')}`;
+    }
     return time + '｜' + session.title;
   });
   return [event.title + ' · ' + kind, event.version ? '发布版本 v' + event.version : '计划草稿', '', ...lines].join('\n');

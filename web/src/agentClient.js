@@ -1,18 +1,29 @@
+import { sessionPeople } from './scheduling';
+
 export async function askModel(question, event, signal) {
-  const confirmed = new Map();
+  const registrations = new Map();
   for (const person of event.attendees) {
-    if (person.status === '已确认') confirmed.set(person.sessionId, (confirmed.get(person.sessionId) ?? 0) + 1);
+    const totals = registrations.get(person.sessionId) ?? { confirmed: 0, waitlisted: 0, pending: 0 };
+    if (person.status === '已确认') totals.confirmed += 1;
+    if (person.status === '候补') totals.waitlisted += 1;
+    if (person.status === '待审核') totals.pending += 1;
+    registrations.set(person.sessionId, totals);
   }
-  const guests = new Map();
-  const agenda = event.agenda.map(({ id, title, start, end, room, guest, equipment }) => {
-    if (guest && !guests.has(guest)) guests.set(guest, `g${guests.size + 1}`);
-    return { id, title, start, end, room, guest: guests.get(guest) ?? '', equipment,
-      confirmed: confirmed.get(id) ?? 0, started: event.actual[id]?.started, ended: event.actual[id]?.ended };
+  const aliases = new Map();
+  const agenda = event.agenda.map(session => {
+    const { id, title, start, end, room, equipment } = session;
+    const people = sessionPeople(event, session).map(person => {
+      if (!aliases.has(person.id)) aliases.set(person.id, `p${aliases.size + 1}`);
+      return { id: aliases.get(person.id), role: person.role, availability: person.availability };
+    });
+    return { id, title, start, end, room, people, equipment, ...registrations.get(id),
+      checkedIn: event.checkins.filter(item => item.sessionId === id).length, started: event.actual[id]?.started, ended: event.actual[id]?.ended };
   });
   const snapshot = {
     id: event.id, title: event.title, date: event.date, venue: event.venue, type: event.type, version: event.version,
     agenda,
     rooms: event.rooms.map(({ id, capacity, ready, equipment }) => ({ id, capacity, ready, equipment })),
+    change: event.change && { sessionId: event.change.sessionId, closedRoom: event.change.closedRoom, earliest: event.change.earliest },
     status: {
       taskCount: event.tasks.length, completedTasks: event.tasks.filter(task => task.done).length,
       pendingTasks: event.tasks.filter(task => !task.done).slice(0, 24).map(task => task.name),

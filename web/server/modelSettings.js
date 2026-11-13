@@ -6,6 +6,9 @@ import { readBody, sendJson } from './localApi.js';
 import { localDatabasePath } from './localData.js';
 import { modelPresets } from '../src/modelPresets.js';
 import { modelEndpoint, readModelConfig, requestModel, toolMessages } from './modelProvider.js';
+import { organizeSources } from './organizeSources.js';
+
+const settingsTables = { chat: 'model_settings', organization: 'organization_model_settings' };
 
 function publicConfig({ provider, protocol, baseUrl, model, keyHeader, key, revision }) {
   return { provider, protocol, baseUrl, model, keyHeader, hasKey: Boolean(key), revision };
@@ -57,6 +60,19 @@ async function testConnection(config, signal) {
   return second?.error || (second?.answer ? '' : '模型未能读取工具结果并完成应答。');
 }
 
+async function testOrganization(config, signal) {
+  const starts = ['14:00', '14:30'];
+  const chunks = starts.map((start, index) => ({
+    chunkId: index + 1, name: ['演练议程.pdf', '演练海报.png'][index], revision: 1, location: '第 1 页',
+    text: `环节名称：案例交流。开始时间：${start}。`,
+  }));
+  const result = await organizeSources(config, { chunks, total: chunks.length }, () => !signal.aborted, signal);
+  const start = result?.facts.find(fact => fact.section === 'agenda' && fact.entity === '案例交流' && fact.field === 'start');
+  const foundBoth = starts.every((value, index) => start?.options.some(option =>
+    option.value === value && option.evidence.some(item => item.chunkId === index + 1)));
+  return foundBoth ? '' : '资料提取测试未识别两条带出处的冲突时间，请检查模型的工具调用和结构化提取能力。';
+}
+
 export function createModelSettings(root, env) {
   const path = localDatabasePath(root, env.HUIXU_MODEL_DB, 'model-settings.sqlite');
   const fallback = readModelConfig(env);
@@ -68,9 +84,10 @@ export function createModelSettings(root, env) {
     mkdirSync(dirname(path), { recursive: true });
     const next = new DatabaseSync(path);
     try {
-      next.exec(`PRAGMA busy_timeout = 5000;
-        PRAGMA secure_delete = ON;
-        CREATE TABLE IF NOT EXISTS model_settings (id INTEGER PRIMARY KEY CHECK (id = 1), config TEXT NOT NULL);`);
+      next.exec(`PRAGMA busy_timeout = 5000; PRAGMA secure_delete = ON;`);
+      for (const table of Object.values(settingsTables)) {
+        next.exec(`CREATE TABLE IF NOT EXISTS ${table} (id INTEGER PRIMARY KEY CHECK (id = 1), config TEXT NOT NULL);`);
+      }
     } catch (error) {
       next.close();
       throw error;
@@ -79,34 +96,46 @@ export function createModelSettings(root, env) {
     return db;
   }
 
-  function read() {
-    const row = connection().prepare('SELECT config FROM model_settings WHERE id = 1').get();
+  function read(table) {
+    const row = connection().prepare(`SELECT config FROM ${table} WHERE id = 1`).get();
     return row ? JSON.parse(row.config) : null;
   }
 
   function getConfig() {
-    const saved = read();
+    const saved = read(settingsTables.chat);
     return saved ? { ...saved, url: modelEndpoint(saved.protocol, saved.baseUrl) } : fallback;
   }
 
-  function status(saved = read()) {
+  function getOrganizationConfig() {
+    const saved = read(settingsTables.organization);
+    return saved ? { ...saved, url: modelEndpoint(saved.protocol, saved.baseUrl) } : getConfig();
+  }
+
+  function status(purpose, saved = read(settingsTables[purpose])) {
     if (saved) return { source: 'workbench', active: publicConfig(saved) };
+    if (purpose === 'organization') {
+      const shared = getConfig();
+      return { source: 'shared', active: shared ? { model: shared.model, protocol: shared.protocol } : null };
+    }
     if (fallback) return { source: 'environment', active: { model: fallback.model, protocol: fallback.protocol } };
     return { source: 'none', active: null };
   }
 
   async function handle(request, response) {
-    const path = new URL(request.url, 'http://localhost').pathname;
+    const { pathname: path, searchParams } = new URL(request.url, 'http://localhost');
     const { method } = request;
     if (path !== '/' && path !== '/test') return sendJson(response, 404, { error: '没有此模型设置操作。' });
     if (path === '/test' ? method !== 'POST' : !['GET', 'POST', 'DELETE'].includes(method)) {
       return sendJson(response, 405, { error: '不支持此模型设置操作。' });
     }
+    const purpose = searchParams.get('purpose') ?? 'chat';
+    if (!Object.hasOwn(settingsTables, purpose)) return sendJson(response, 400, { error: '请选择有效的模型用途。' });
+    const table = settingsTables[purpose];
     try {
-      if (method === 'GET') return sendJson(response, 200, status());
+      if (method === 'GET') return sendJson(response, 200, status(purpose));
       if (method === 'DELETE') {
-        connection().prepare('DELETE FROM model_settings WHERE id = 1').run();
-        return sendJson(response, 200, status());
+        connection().prepare(`DELETE FROM ${table} WHERE id = 1`).run();
+        return sendJson(response, 200, status(purpose));
       }
       if (request.headers['content-type']?.split(';', 1)[0] !== 'application/json') {
         return sendJson(response, 415, { error: '模型设置须以 JSON 提交。' });
@@ -117,15 +146,19 @@ export function createModelSettings(root, env) {
       try { input = JSON.parse(body.toString('utf8')); } catch {
         return sendJson(response, 400, { error: '模型设置格式无效。' });
       }
-      const { config, reuseKey, error } = connectionFrom(input, read());
+      const testCurrent = path === '/test' && purpose === 'organization' && input?.useCurrent === true;
+      const { config, reuseKey, error } = testCurrent ? { config: getOrganizationConfig() } : connectionFrom(input, read(table));
       if (error) return sendJson(response, 400, { error });
+      if (!config) return sendJson(response, 400, { error: '请先配置资料整理或 Agent 对话模型。' });
       if (path === '/test') {
         if (testing) return sendJson(response, 429, { error: '模型连接正在测试，请稍候。' });
         testing = true;
         const disconnect = new AbortController();
         response.once('close', () => disconnect.abort());
         try {
-          const failure = await testConnection(config, AbortSignal.any([disconnect.signal, AbortSignal.timeout(60000)]));
+          const timeout = AbortSignal.timeout(60000);
+          const signal = AbortSignal.any([disconnect.signal, timeout]);
+          const failure = purpose === 'organization' ? await testOrganization(config, signal) : await testConnection(config, signal);
           if (disconnect.signal.aborted) return;
           if (failure) return sendJson(response, 502, { error: failure });
           return sendJson(response, 200, { connected: true });
@@ -141,14 +174,14 @@ export function createModelSettings(root, env) {
       const saved = { ...settings, revision: randomUUID() };
       const data = JSON.stringify(saved);
       if (reuseKey) {
-        const result = connection().prepare(`UPDATE model_settings SET config = ?
+        const result = connection().prepare(`UPDATE ${table} SET config = ?
           WHERE id = 1 AND json_extract(config, '$.revision') = ?`).run(data, input.keyRevision);
         if (!result.changes) return sendJson(response, 409, { error: '模型设置已更新，请重新打开设置。' });
       } else {
-        connection().prepare(`INSERT INTO model_settings (id, config) VALUES (1, ?)
+        connection().prepare(`INSERT INTO ${table} (id, config) VALUES (1, ?)
           ON CONFLICT(id) DO UPDATE SET config = excluded.config`).run(data);
       }
-      return sendJson(response, 200, status(saved));
+      return sendJson(response, 200, status(purpose, saved));
     } catch {
       if (!response.destroyed) sendJson(response, 500, { error: '本机模型设置暂时不可用。' });
     }
@@ -159,5 +192,5 @@ export function createModelSettings(root, env) {
     db = undefined;
   }
 
-  return { getConfig, handle, close };
+  return { getConfig, getOrganizationConfig, handle, close };
 }

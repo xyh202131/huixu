@@ -18,7 +18,7 @@ async function listen(handler, t) {
   return `http://127.0.0.1:${server.address().port}`;
 }
 
-test('会话保护的模型设置即时驱动对话和整理，并保留环境变量后备', async t => {
+test('模型设置按用途启用、验收和恢复共享配置', async t => {
   const dir = await mkdtemp(join(tmpdir(), 'huixu-model-test-'));
   const authPath = join(dir, 'auth.sqlite');
   const modelsPath = join(dir, 'model-settings.sqlite');
@@ -32,7 +32,11 @@ test('会话保护的模型设置即时驱动对话和整理，并保留环境�
       const tools = body.tools ?? [];
       const name = tools.some(tool => tool.name === 'verify_connection') ? 'verify_connection'
         : tools.some(tool => tool.name === 'record_import_facts') ? 'record_import_facts' : 'read_agenda';
-      const facts = [{ section: 'event', field: 'title', value: '测试论坛', chunkId: 7 }];
+      let facts = [{ section: 'event', field: 'title', value: '测试论坛', chunkId: 7 }];
+      if (name === 'record_import_facts' && last.content.includes('演练议程.pdf')) {
+        facts = ['14:00', '14:30'].map((value, index) => ({ section: 'agenda', entity: '案例交流', field: 'start', value, chunkId: index + 1 }));
+        if (body.model === 'incomplete-fixture') facts.pop();
+      }
       const content = Array.isArray(last.content) ? [{ type: 'text', text: '已核对。' }]
         : [{ type: 'tool_use', id: 'fixture-tool', name, input: name === 'record_import_facts' ? { facts } : {} }];
       return sendJson(response, 200, { model: body.model, content });
@@ -54,14 +58,14 @@ test('会话保护的模型设置即时驱动对话和整理，并保留环境�
   let review;
   const memory = {
     organizationScope: () => scope,
-    readOrganization: () => review,
+    readOrganization: (_eventId, revision) => review?.revision === revision ? review : null,
     organizationInput: () => ({ total: 1, chunks: [{ chunkId: 7, text: '活动名称是测试论坛。', name: '方案.txt', revision: 1, location: '第 1 段' }] }),
     saveOrganization: (eventId, revision, result) => { review = result; },
   };
   const routes = {
     '/api/model-settings': auth.requireSession(models.handle),
     '/api/agent': auth.requireSession(createAgentHandler(models.getConfig, memory)),
-    '/api/project-organization': auth.requireSession(createOrganizationHandler(models.getConfig, memory)),
+    '/api/project-organization': auth.requireSession(createOrganizationHandler(models.getOrganizationConfig, memory)),
   };
   const origin = await listen((request, response) => {
     const { pathname, search } = new URL(request.url, 'http://localhost');
@@ -120,6 +124,7 @@ test('会话保护的模型设置即时驱动对话和整理，并保留环境�
   assert.equal((await request(settings, { ...keepKey, baseUrl: provider + '/other/v1' })).status, 400);
   const updated = await request(settings, { ...keepKey, model: 'fixture-next' });
   assert.equal(updated.status, 200);
+  const { active: updatedChat } = await updated.json();
   assert.equal((await request(settings, keepKey)).status, 400);
 
   const agentInput = { question: '请查询议程。', event: { id: 'forum', title: '测试论坛', agenda: [], rooms: [] } };
@@ -131,8 +136,41 @@ test('会话保护的模型设置即时驱动对话和整理，并保留环境�
   assert.equal(organized.review.facts[0].options[0].value, '测试论坛');
   assert.ok(received.every(item => item.path === '/v1/messages' && item.key === apiKey));
 
+  const organization = settings + '?purpose=organization';
+  const organizationTest = settings + '/test?purpose=organization';
+  assert.equal((await request(settings + '?purpose=other')).status, 400);
+  assert.deepEqual(await (await request(organization)).json(), { source: 'shared', active: { model: 'fixture-next', protocol: 'anthropic' } });
+  assert.deepEqual(await (await request(organizationTest, { useCurrent: true })).json(), { connected: true });
+  assert.equal(received.at(-1).model, 'fixture-next');
+
+  const organizationKey = 'fixture-organization-key';
+  const extraction = { ...custom, model: 'extraction-fixture', apiKey: organizationKey };
+  assert.equal((await request(organizationTest, { ...extraction, model: 'incomplete-fixture' })).status, 502);
+  assert.deepEqual(await (await request(organizationTest, extraction)).json(), { connected: true });
+  assert.equal((await (await request(organization)).json()).source, 'shared');
+  const organizationSaved = await request(organization, extraction);
+  assert.equal(organizationSaved.status, 200);
+  const organizationStatus = await organizationSaved.json();
+  assert.equal(organizationStatus.active.model, 'extraction-fixture');
+  assert.ok(!JSON.stringify(organizationStatus).includes(organizationKey));
+  assert.equal((await request(organization, { ...extraction, apiKey: '', keyRevision: updatedChat.revision })).status, 400);
+
+  scope.revision = '2';
+  const secondReview = await (await request('/api/project-organization?event=forum', {})).json();
+  assert.equal(secondReview.review.model, 'extraction-fixture');
+  assert.equal(received.at(-1).key, organizationKey);
+  assert.equal((await (await request('/api/agent', agentInput)).json()).model, 'fixture-next');
+  assert.equal(received.at(-1).key, apiKey);
+
   const reopened = createModelSettings(process.cwd(), env);
-  try { assert.equal(reopened.getConfig().model, 'fixture-next'); } finally { reopened.close(); }
+  try {
+    assert.equal(reopened.getConfig().model, 'fixture-next');
+    assert.equal(reopened.getOrganizationConfig().model, 'extraction-fixture');
+  } finally {
+    reopened.close();
+  }
+  assert.deepEqual(await (await request(organization, undefined, { method: 'DELETE' })).json(),
+    { source: 'shared', active: { model: 'fixture-next', protocol: 'anthropic' } });
   assert.equal((await (await request(settings, undefined, { method: 'DELETE' })).json()).source, 'environment');
   assert.equal((await (await request('/api/agent', agentInput)).json()).model, 'fallback-fixture');
 });

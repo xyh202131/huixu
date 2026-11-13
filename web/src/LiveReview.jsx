@@ -4,6 +4,7 @@ import { Badge, Empty, IconTile, PageHead, Panel, Table } from './components';
 import { Dialog, MetricValue, Notice } from './interactions';
 import { Select } from './Select';
 import { incidentChange, incidentKinds, materialText, money, participantCount, roomLabel, timeRange, uid } from './model';
+import { checkinPoint } from './scheduling';
 
 export function Live({ event, readOnly, mobile, update, openChange }) {
   const [board, setBoard] = useState(false);
@@ -68,7 +69,7 @@ export function Live({ event, readOnly, mobile, update, openChange }) {
     </Panel><Panel title="观众签到" action={<Badge tone="success">入场&nbsp;<MetricValue value={entranceCount} compact />&nbsp;人</Badge>}>
       {!readOnly && <form className="form-stack" onSubmit={checkIn}>
         <Select label="签到点" value={scanSession} onChange={value => { setScanSession(value); setScanResult(null); }}
-          options={[{ value: '', label: '活动入场' }, ...sessions.map(item => ({ value: item.id, label: roomLabel(item.room) + ' · ' + item.title }))]} />
+          options={[{ value: '', label: '活动入场' }, ...sessions.map(item => ({ value: item.id, label: checkinPoint(item) + ' · ' + item.title }))]} />
         <label>个人凭证<input name="code" autoCapitalize="characters" autoComplete="off" spellCheck={false}
           placeholder={event.isSample ? '演练凭证 G001' : '输入已确认观众的凭证'} required /></label>
         <button className="button primary"><ScanLine size={17} />核验并签到</button>

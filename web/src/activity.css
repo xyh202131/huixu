@@ -108,6 +108,7 @@
 .agent-transcript > .button { justify-self: start; }
 .agent-transcript .notice { padding: 9px 10px; }
 .agent-evidence { color: var(--muted); font-size: 12px; overflow-wrap: anywhere; }
+.agent-move-analysis { display: grid; gap: 7px; padding: 10px; border: 1px solid var(--border); border-radius: 9px; }
 .agent-prompts { display: flex; flex-wrap: wrap; gap: 6px; }
 .agent-question, .agent-answer { padding: 8px 10px; border-radius: 9px; white-space: pre-wrap; overflow-wrap: anywhere; }
 .agent-question { justify-self: end; max-width: 100%; background: var(--accent-soft); }

@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 import { sessionExpired } from './authClient';
+import { Tabs } from './components';
 import { Dialog, Notice, Popconfirm } from './interactions';
 import { modelPresets } from './modelPresets';
 import { Select } from './Select';
@@ -7,9 +8,12 @@ import { Select } from './Select';
 const providers = [...Object.entries(modelPresets).map(([value, { label }]) => ({ value, label })), { value: 'custom', label: '自定义接口' }];
 const protocols = [{ value: 'openai', label: 'OpenAI · Chat Completions' }, { value: 'anthropic', label: 'Anthropic · Messages' }];
 const keyHeaders = [{ value: 'x-api-key', label: 'x-api-key' }, { value: 'bearer', label: 'Authorization · Bearer' }];
+const chatLabel = 'Agent 对话';
+const organizationLabel = '资料整理';
 
-async function settingsRequest({ method = 'GET', test = false, input, signal }) {
-  const response = await fetch('/api/model-settings' + (test ? '/test' : ''), {
+async function settingsRequest({ purpose, method = 'GET', test = false, input, signal }) {
+  const path = test ? '/api/model-settings/test' : '/api/model-settings';
+  const response = await fetch(`${path}?purpose=${purpose}`, {
     method, signal,
     ...(input && { headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(input) }),
   });
@@ -27,7 +31,7 @@ function settingsFields(provider, saved) {
     keyHeader: preset?.keyHeader ?? 'x-api-key', apiKey: '' };
 }
 
-function ModelSettingsForm() {
+function ModelSettingsForm({ purpose }) {
   const [status, setStatus] = useState(null);
   const [form, setForm] = useState(() => settingsFields('openai'));
   const [busy, setBusy] = useState('load');
@@ -35,6 +39,7 @@ function ModelSettingsForm() {
   const request = useRef(null);
   const { active, source } = status ?? {};
   const saved = source === 'workbench' ? active : null;
+  const isOrganization = purpose === 'organization';
   const custom = form.provider === 'custom';
   const keepKey = saved?.hasKey && saved.provider === form.provider && (!custom || (
     saved.protocol === form.protocol && saved.baseUrl === form.baseUrl.trim() &&
@@ -51,7 +56,7 @@ function ModelSettingsForm() {
     setFeedback(null);
     setBusy('load');
     try {
-      const next = await settingsRequest({ signal });
+      const next = await settingsRequest({ purpose, signal });
       if (!signal.aborted) applyStatus(next);
     } catch (error) {
       if (!signal.aborted) setFeedback({ tone: 'error', text: error.message });
@@ -65,7 +70,7 @@ function ModelSettingsForm() {
     request.current = controller;
     void load(controller.signal);
     return () => controller.abort();
-  }, []);
+  }, [purpose]);
 
   function update(field, value) {
     setFeedback(null);
@@ -79,22 +84,25 @@ function ModelSettingsForm() {
     setBusy(action);
     try {
       if (action === 'remove') {
-        const next = await settingsRequest({ method: 'DELETE', signal });
+        const next = await settingsRequest({ purpose, method: 'DELETE', signal });
         if (signal.aborted) return;
         applyStatus(next);
         setFeedback({ tone: 'success', text: '工作台配置已移除。' });
         return;
       }
       const { provider, protocol, baseUrl, model, keyHeader, apiKey } = form;
-      const input = { provider, protocol, baseUrl, model, keyHeader, apiKey, keyRevision: keepKey ? saved.revision : undefined };
-      const next = await settingsRequest({ method: 'POST', test: action === 'test', input, signal });
+      const test = action === 'test' || action === 'test-current';
+      const input = action === 'test-current' ? { useCurrent: true }
+        : { provider, protocol, baseUrl, model, keyHeader, apiKey, keyRevision: keepKey ? saved.revision : undefined };
+      const next = await settingsRequest({ purpose, method: 'POST', test, input, signal });
       if (signal.aborted) return;
-      if (action === 'test') {
-        setFeedback({ tone: 'success', text: '连接与工具调用测试通过。' });
+      if (test) {
+        const text = isOrganization ? '资料提取测试通过，两条冲突时间均有原文出处。' : '连接与工具调用测试通过。';
+        setFeedback({ tone: 'success', text });
         return;
       }
       applyStatus(next);
-      setFeedback({ tone: 'success', text: '模型已启用，后续对话和资料整理将使用此配置。' });
+      setFeedback({ tone: 'success', text: isOrganization ? '资料整理模型已启用。' : 'Agent 对话模型已启用。' });
     } catch (error) {
       if (!signal.aborted) setFeedback({ tone: 'error', text: error.message });
     } finally {
@@ -109,9 +117,19 @@ function ModelSettingsForm() {
     </>}
   </>;
 
-  const sourceLabel = source === 'environment' ? '环境变量' : modelPresets[active?.provider]?.label ?? '自定义接口';
+  let activeLabel = '尚未启用模型。';
+  if (source === 'shared') activeLabel = active ? `沿用 Agent 对话模型 · ${active.model}` : '默认沿用 Agent 对话模型。当前尚未配置模型。';
+  else if (active) {
+    const sourceLabel = source === 'environment' ? '环境变量' : modelPresets[active.provider]?.label ?? '自定义接口';
+    activeLabel = `当前使用 ${sourceLabel} · ${active.model}`;
+  }
   return <>
-    <Notice>{active ? `当前使用 ${sourceLabel} · ${active.model}` : '尚未启用模型。'}</Notice>
+    <Notice>{activeLabel}</Notice>
+    {source === 'shared' && active && <div className="actions">
+      <button type="button" className="button small" disabled={Boolean(busy)} onClick={() => submit('test-current')}>
+        {busy === 'test-current' ? '正在测试…' : '测试当前整理模型'}
+      </button>
+    </div>}
     <form className="form-stack" aria-busy={Boolean(busy)} onSubmit={event => {
       event.preventDefault();
       void submit(event.nativeEvent.submitter?.value === 'test' ? 'test' : 'save');
@@ -132,13 +150,17 @@ function ModelSettingsForm() {
         <label>API Key{custom && !keepKey ? '（如接口需要）' : ''}<input type="password" autoComplete="off" spellCheck={false}
           required={!custom && !keepKey} maxLength={4096} value={form.apiKey} onChange={event => update('apiKey', event.target.value)}
           placeholder={keepKey ? '已保存，留空沿用' : '填写服务商 API Key'} /></label>
-        <p className="muted">密钥由本机服务保存。测试使用示例问题验证工具调用和结果回传。</p>
+        <p className="muted">{isOrganization ? '填写后为非结构化资料指定独立模型。测试使用演练资料核对冲突字段与原文出处。'
+          : '密钥由本机服务保存。测试使用示例问题验证工具调用和结果回传。'}</p>
       </fieldset>
       {feedback && <Notice tone={feedback.tone} announce>{feedback.text}</Notice>}
       <div className="actions">
         {saved && !busy && <Popconfirm label="移除配置" confirmLabel="确认移除"
-          description="移除后将删除本机保存的 API Key，并恢复环境变量配置（如有）。" onConfirm={() => submit('remove')} />}
-        <button type="submit" value="test" className="button" disabled={Boolean(busy)}>{busy === 'test' ? '正在测试…' : '测试连接'}</button>
+          description={isOrganization ? '移除后删除此用途的 API Key，资料整理恢复沿用 Agent 对话模型。'
+            : '移除后删除此用途的 API Key，并恢复环境变量配置（如有）。'} onConfirm={() => submit('remove')} />}
+        <button type="submit" value="test" className="button" disabled={Boolean(busy)}>
+          {busy === 'test' ? '正在测试…' : isOrganization ? '测试资料提取' : '测试连接'}
+        </button>
         <button type="submit" value="save" className="button primary" disabled={Boolean(busy)}>{busy === 'save' ? '正在保存…' : '保存并启用'}</button>
       </div>
     </form>
@@ -146,8 +168,13 @@ function ModelSettingsForm() {
 }
 
 export function ModelSettings({ account, openAccount, close }) {
+  const [label, setLabel] = useState(chatLabel);
+  const purpose = label === organizationLabel ? 'organization' : 'chat';
   return <Dialog title="模型设置" fullOnMobile close={close}>
-    {account ? <ModelSettingsForm /> : <>
+    {account ? <>
+      <Tabs label="模型用途" items={[chatLabel, organizationLabel]} value={label} onChange={setLabel} />
+      <ModelSettingsForm key={purpose} purpose={purpose} />
+    </> : <>
       <p className="muted">登录工作台后可配置 Agent 和资料整理使用的模型。</p>
       <div className="actions"><button type="button" className="button primary" onClick={openAccount}>前往登录</button></div>
     </>}
