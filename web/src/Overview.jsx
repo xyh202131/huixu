@@ -1,12 +1,17 @@
 import { ArrowRight, ArrowRightLeft, CalendarDays, CalendarX2, CheckSquare, ChevronRight, Clock3, FileText, MapPin, Monitor, UploadCloud, UsersRound } from 'lucide-react';
-import { Badge, Empty, IconTile, Panel } from './components';
+import { Badge, Empty, IconTile, LinkButton, Panel } from './components';
 import { MetricValue } from './interactions';
 import { MarbleFlow } from './MarbleFlow';
-import { dateLabel, participantCount } from './model';
+import { dateLabel, liveAgenda, participantCount, roomLabel, timeRange } from './model';
 
 export function Overview({ event, readOnly, navigate, openImport }) {
   const completed = event.tasks.filter(task => task.done).length;
   const openIssues = event.issues.filter(issue => !issue.resolved);
+  const sessions = [...event.agenda].sort((a, b) => a.start.localeCompare(b.start));
+  const { current, next } = liveAgenda(event, sessions);
+  const agendaRows = event.onsite
+    ? [[current, '当前'], [next, '下一场']].filter(([item]) => item)
+    : sessions.slice(0, 4).map(item => [item, '']);
   const stats = [
     [UsersRound, 'success', '确认报名', participantCount(event) + ' / ' + event.capacity, '已确认报名人数 / 目标人数', 'registration'],
     [CheckSquare, 'success', '筹备任务', completed + ' / ' + event.tasks.length, '已完成任务 / 总任务', 'prep'],
@@ -44,6 +49,16 @@ export function Overview({ event, readOnly, navigate, openImport }) {
         <span className="muted">{note}</span>
       </button>)}
     </div>
+    <div className="overview-details">
+      <Panel title={event.onsite ? '现场议程' : '当日议程'} className="overview-agenda" action={
+        <LinkButton onClick={() => navigate(event.onsite ? 'live' : 'schedule')}>{event.onsite ? '查看现场' : '完整议程'}</LinkButton>
+      }>
+        {agendaRows.length ? <ul className="overview-agenda-list">{agendaRows.map(([item, label]) => <li key={item.id}>
+          <span className="tabular">{label === '当前' ? '开始于 ' + event.actual[item.id].started : timeRange(item)}</span>
+          <div><strong>{item.title}</strong><small>{roomLabel(item.room)}</small></div>
+          {label && <Badge tone={label === '当前' ? 'success' : 'neutral'}>{label}</Badge>}
+        </li>)}</ul> : <Empty>{event.onsite && sessions.length ? '当日环节已结束。' : '暂无议程。'}</Empty>}
+      </Panel>
       <Panel title="待处理" className="activity-pending" action={pending.length > 0 && <Badge tone="neutral">{pending.length} 项</Badge>}>
         {pending.length ? <ul className="action-list">{pending.map(([Icon, tone, title, note, page]) => <li key={title}>
           <button onClick={() => navigate(page)}>
@@ -53,5 +68,6 @@ export function Overview({ event, readOnly, navigate, openImport }) {
           </button>
         </li>)}</ul> : <Empty>当前没有待处理事项。</Empty>}
       </Panel>
+    </div>
   </>;
 }

@@ -1,9 +1,11 @@
 import { useEffect, useRef, useState } from 'react';
 import { ArrowUp, FileText, PanelRightClose, Sparkles } from 'lucide-react';
+import { Badge } from './components';
 import { Dialog, Notice } from './interactions';
 import { checkinPoint, roomLabel, timeRange } from './scheduling';
 
-function AgentResponse({ run, ask, stop, askLocal, openSettings, reviewProposal, openSource }) {
+function AgentResponse({ run, event, ask, stop, askLocal, openSettings, reviewProposal, openSource, openReviewedChange }) {
+  const released = run.reviewChangeId && event.history.find(change => change.id === run.reviewChangeId);
   return <>
     <p className="agent-question">{run.question}</p>
     {run.pending && <>
@@ -24,40 +26,63 @@ function AgentResponse({ run, ask, stop, askLocal, openSettings, reviewProposal,
     {run.answer && <p className="agent-answer" role="status">{run.answer}</p>}
     {run.evidence && <p className="agent-evidence">已读取 {run.evidence.title} · {run.evidence.version ? '议程 v' + run.evidence.version : '计划草稿'}</p>}
     {run.statusReads?.length > 0 && <p className="agent-evidence">已读取 {run.statusReads.join('、')}</p>}
-    {run.citations?.length > 0 && <div className="memory-results">
-      <p className="agent-evidence">检索到的原文</p>
-      {run.citations.map(item => <button key={item.chunkId} type="button" className="memory-hit" onClick={() => openSource(item.chunkId)}>
-        <strong>{item.name} · v{item.revision}</strong><span>{item.location}</span>
-      </button>)}
-    </div>}
+    {run.citations?.length > 0 && <details className="agent-sources" open>
+      <summary>检索到的原文（{run.citations.length}）</summary>
+      <ol>{run.citations.map((item, index) => <li key={item.chunkId}>
+        <button type="button" className="memory-hit" onClick={() => openSource(item.chunkId)}>
+          <span className="agent-source-number" aria-hidden="true">{index + 1}</span>
+          <span><strong>{item.name} · v{item.revision}</strong><small>{item.location}</small></span>
+          <FileText size={16} aria-hidden="true" />
+        </button>
+      </li>)}</ol>
+    </details>}
     {run.model && <p className="agent-evidence">模型 · {run.model}</p>}
-    {run.proposal?.kind === 'move' && run.proposal.analysis && <MoveAnalysis proposal={run.proposal} />}
-    {run.proposal && <button type="button" className="button primary" onClick={reviewProposal}>
-      {run.proposal.kind === 'event' ? '打开活动草稿' : '打开变更单核对'}
-    </button>}
+    {run.proposal?.kind === 'move' && run.proposal.analysis && <MoveAnalysis proposal={run.proposal} event={event} reviewProposal={reviewProposal} />}
+    {run.proposal?.kind === 'event' && <button type="button" className="button primary" onClick={() => reviewProposal()}>打开活动草稿</button>}
+    {released && <>
+      <Notice tone="success" announce>{released.title}已发布 · v{released.version}</Notice>
+      <button type="button" className="button small" onClick={() => openReviewedChange(released.id)}>查看发布记录</button>
+    </>}
+    {run.reviewChangeId && run.reviewChangeId === event.change?.id && <button type="button" className="button small" onClick={() => openReviewedChange()}>查看待发布变更单</button>}
   </>;
 }
 
-function MoveAnalysis({ proposal }) {
+function MoveAnalysis({ proposal, event, reviewProposal }) {
   const { requested, alternatives, blocked, window } = proposal.analysis;
   const { affected } = proposal;
-  return <div className="agent-move-analysis">
-    <p><strong>原请求</strong>　{roomLabel(requested.candidate.room)} · {timeRange(requested.candidate)}</p>
-    {requested.issues.length > 0 ? <p className="muted">{requested.issues.join('、')}</p> : <p className="muted">原请求校验通过</p>}
-    {alternatives.length > 0 && <ul className="plain-list">{alternatives.map(({ candidate }) => <li key={candidate.room + candidate.start}>
-      可行备选　{roomLabel(candidate.room)} · {timeRange(candidate)} · {checkinPoint(candidate)}
-    </li>)}</ul>}
+  const options = [requested, ...alternatives];
+  const [selection, setSelection] = useState(() => requested.issues.length && alternatives.length ? 1 : 0);
+  const { candidate, issues } = options[selection];
+  const room = event.rooms.find(item => item.id === candidate.room);
+  const session = event.agenda.find(item => item.id === proposal.before.id);
+  return <section className="agent-move-analysis" aria-label="议程调整分析">
+    <h3>{proposal.before.title} · 调整方案</h3>
+    <div className="agent-move-compare">
+      <p><small>原安排</small><strong>{roomLabel(proposal.before.room)}</strong><span>{timeRange(proposal.before)}</span></p>
+      <p><small>所选方案</small><strong>{roomLabel(candidate.room)}</strong><span>{timeRange(candidate)}</span></p>
+    </div>
+    <div className="selection-list" aria-label="选择调整方案">{options.map(({ candidate: option, issues: blockers }, index) => <button type="button"
+      key={`${option.room}/${option.start}/${option.end}`} aria-pressed={selection === index} onClick={() => setSelection(index)}>
+      <span className="radio-mark" aria-hidden="true" /><strong>{roomLabel(option.room)} · {timeRange(option)}</strong>
+      <Badge tone={blockers.length ? 'amber' : 'success'}>{blockers.length ? '存在冲突' : '校验通过'}</Badge>
+      <span className="choice-note">{index === 0 ? '原请求' : '备选'}{blockers.length > 0 && ' · ' + blockers.join('、')}</span>
+    </button>)}</div>
     {requested.issues.length > 0 && !alternatives.length && <>
       <Notice tone="warning">{timeRange(window)} 的搜索范围内暂无可行方案。</Notice>
       {blocked.filter(({ candidate }) => candidate.room !== requested.candidate.room).slice(0, 3).map(({ candidate, issues }) =>
         <p key={candidate.room} className="muted">{roomLabel(candidate.room)}　{issues.join('、')}</p>)}
     </>}
-    <p className="muted">{affected.confirmed} 人已确认 · {affected.waitlisted} 人候补 · {affected.pending} 人待审核 · {affected.assignedGuides} 人已认领分场引导</p>
-    <p className="muted">原签到点　{affected.checkinBefore} · 分场已签到 {affected.checkedIn} 人。通知预览覆盖 {affected.confirmed} 位已确认观众。</p>
-  </div>;
+    <dl className="agent-move-impact">
+      <div><dt>容量</dt><dd>{affected.confirmed} 人已确认{room && ` / ${room.capacity} 个名额`}</dd></div>
+      <div><dt>所需设备</dt><dd>{session?.equipment?.join('、') || '无额外设备要求'}</dd></div>
+      <div><dt>报名影响</dt><dd>{affected.waitlisted} 人候补 · {affected.pending} 人待审核 · {affected.checkedIn} 人已签到</dd></div>
+      <div><dt>新签到点</dt><dd>{checkinPoint(candidate)} · {affected.assignedGuides} 人已认领分场引导</dd></div>
+    </dl>
+    <button type="button" className="button primary" onClick={() => reviewProposal(candidate)}>{issues.length ? '打开变更单查看冲突' : '打开变更单核对'}</button>
+  </section>;
 }
 
-export function AgentWorkspace({ id, event, account, docked, open, close, run, ask, stop, askLocal, openSettings, openAccount, reviewProposal, openSource }) {
+export function AgentWorkspace({ id, event, account, docked, open, close, run, ask, stop, askLocal, openSettings, openAccount, reviewProposal, openSource, openReviewedChange }) {
   const [input, setInput] = useState('');
   const transcript = useRef(null);
   const question = run?.question;
@@ -78,7 +103,7 @@ export function AgentWorkspace({ id, event, account, docked, open, close, run, a
     <div className="agent-context"><FileText size={15} aria-hidden="true" /><span>{event.title}</span></div>
     <div ref={transcript} className="agent-transcript" role="region" aria-label="Agent 对话" tabIndex={account && run ? 0 : undefined}>
       {account ? <>
-        {run ? <AgentResponse {...{ run, ask, stop, askLocal, openSettings, reviewProposal, openSource }} /> :
+        {run ? <AgentResponse {...{ run, event, ask, stop, askLocal, openSettings, reviewProposal, openSource, openReviewedChange }} /> :
           <p className="muted">查询活动进展、查找资料，或准备一份议程调整草稿。</p>}
         {!run?.pending && <div className="agent-prompts">
           <button type="button" className="button small" onClick={() => ask('当前活动的筹备进展怎么样？')}>查看筹备进展</button>

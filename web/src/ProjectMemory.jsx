@@ -1,9 +1,28 @@
 import { useEffect, useRef, useState } from 'react';
-import { BookOpen, Download, Search, UploadCloud } from 'lucide-react';
+import { BookOpen, Download, FileText, Search, UploadCloud } from 'lucide-react';
 import { Badge, Empty, Panel, Table } from './components';
 import { CheckControl, Dialog, Notice } from './interactions';
 import { memoryRequest, memoryUrl, sourceAccept } from './memoryClient';
 import { isArchiveName } from './sourceFormats';
+
+function ImportProgress({ run }) {
+  const remaining = run.total - run.indexed - run.duplicates - run.errors.length;
+  const summary = run.pending ? `${run.done} / ${run.total} 个文件已处理` : [
+    `${run.indexed} 个可检索`, `${run.duplicates} 个重复`, `${run.errors.length} 个导入失败`,
+    remaining > 0 && `${remaining} 个暂无可检索片段`,
+  ].filter(Boolean).join(' · ');
+  return <Panel className="import-progress" title="本批导入" action={<Badge tone={run.pending ? 'neutral' : run.errors.length || remaining ? 'amber' : 'success'}>
+    {run.pending ? '处理中' : '处理完成'}
+  </Badge>}>
+    <p className="muted" role="status">{summary}</p>
+    <progress value={run.done} max={run.total} aria-label="已处理文件进度" />
+    <ul className="import-progress-files" aria-label="文件处理结果">{run.files.map(({ name, state, tone, note }, index) => <li key={index}>
+      <FileText size={16} aria-hidden="true" />
+      <div><strong>{name}</strong>{note && <small>{note}</small>}</div>
+      <Badge tone={tone}>{state}</Badge>
+    </li>)}</ul>
+  </Panel>;
+}
 
 export function ProjectMemory({ eventId, importFiles, importRun, evidenceId, onCloseEvidence, onAccessChange, children }) {
   const [sources, setSources] = useState([]);
@@ -103,10 +122,7 @@ export function ProjectMemory({ eventId, importFiles, importRun, evidenceId, onC
       </div>
     </section>
 
-    {importRun && <Notice tone={busy ? 'info' : importRun.errors.length ? 'warning' : 'success'} announce>
-      {busy ? `已处理 ${importRun.done} / ${importRun.total} 个文件` : `已处理 ${importRun.total} 个文件 · ${importRun.indexed} 个可检索 · ${importRun.duplicates} 个重复 · ${importRun.errors.length} 个导入失败`}
-      {importRun.errors.length > 0 && <ul className="plain-list">{importRun.errors.map(({ name, reason }, index) => <li key={index}>{name} · {reason}</li>)}</ul>}
-    </Notice>}
+    {importRun && <ImportProgress run={importRun} />}
 
     {children}
     <Panel title="活动记忆与索引" action={<button className="button small" disabled={!sources.length} onClick={() => show({ view: 'wiki' }, setPreview)}><BookOpen size={16} />查看知识页</button>}>

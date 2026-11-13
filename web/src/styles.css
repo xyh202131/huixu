@@ -101,7 +101,7 @@ button.metric:hover { border-color: var(--accent-border); background: var(--surf
 .icon-tile { display: inline-grid; place-items: center; width: 48px; height: 48px; border-radius: 10px; flex: 0 0 auto; }
 .icon-tile.success, .badge.success, .notice.success { background: #e3effa; color: #244e76; }
 .icon-tile.amber, .badge.amber { background: #fff1d2; color: #7e4100; }
-.icon-tile.rose { background: #fde9ed; color: #a81a45; }
+.icon-tile.rose, .badge.rose { background: #fde9ed; color: #a81a45; }
 .icon-tile.purple, .badge.purple { background: #eeebfb; color: #443088; }
 .icon-tile.blue { background: var(--accent-soft); color: var(--accent); }
 .badge { display: inline-flex; align-items: center; border-radius: 7px; padding: 3px 8px; font-size: 12px; line-height: 1.3; font-weight: 680; white-space: nowrap; }
@@ -192,6 +192,18 @@ tr[draggable="true"] { cursor: grab; }
 .upload-zone h2 { font-size: 20px; line-height: 1.4; }
 .upload-zone p { color: var(--muted); font-size: 14px; line-height: 1.6; text-wrap: pretty; }
 .upload-zone-access { display: flex; align-items: center; flex-wrap: wrap; gap: 6px 16px; padding: 8px 12px; border-radius: 9px; background: var(--surface-hover); }
+.import-progress { display: grid; gap: 9px; }
+.import-progress .panel-head { margin-bottom: 0; }
+.import-progress progress { width: 100%; height: 8px; accent-color: var(--accent); }
+.import-progress-files { display: grid; max-height: 20rem; overflow: auto; margin: 0; padding: 0; list-style: none; }
+.import-progress-files li {
+  display: grid; grid-template-columns: auto minmax(0, 1fr) auto; align-items: start; gap: 9px;
+  padding: 9px 2px; border-bottom: 1px solid var(--border); font-size: 13px;
+}
+.import-progress-files li:last-child { border-bottom: 0; }
+.import-progress-files li > svg { margin-top: 3px; color: var(--accent); }
+.import-progress-files strong, .import-progress-files small { display: block; overflow-wrap: anywhere; }
+.import-progress-files small { margin-top: 3px; color: var(--muted); }
 .evidence-grid, .form-grid { display: grid; gap: 12px; grid-template-columns: repeat(2, minmax(0, 1fr)); }
 .evidence { padding: 13px 15px; border: 1px solid var(--border); border-radius: 9px; }
 .evidence .muted { margin-top: 6px; font-size: 13px; }
@@ -208,6 +220,8 @@ tr[draggable="true"] { cursor: grab; }
 .import-review-footer { justify-content: flex-end; padding-top: 12px; border-top: 1px solid var(--border); }
 .import-review-footer p { margin-inline-end: auto; font-size: 14px; }
 .import-conflict, .import-review-detail { min-width: 0; }
+.import-conflict-toolbar { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 8px; }
+.import-conflict-toolbar h3 { font-size: 15px; }
 .import-conflict-head { display: flex; justify-content: space-between; align-items: flex-start; gap: 8px; margin-bottom: 8px; }
 .import-conflict h3, .import-facts h3 { font-size: 15px; }
 .import-facts h3 { margin-bottom: 9px; }

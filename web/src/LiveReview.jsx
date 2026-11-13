@@ -3,7 +3,7 @@ import { AlertTriangle, ArrowRightLeft, ClipboardCheck, Monitor, ScanLine } from
 import { Badge, Empty, IconTile, PageHead, Panel, Table } from './components';
 import { Dialog, MetricValue, Notice } from './interactions';
 import { Select } from './Select';
-import { incidentChange, incidentKinds, materialText, money, participantCount, roomLabel, timeRange, uid } from './model';
+import { incidentChange, incidentKinds, liveAgenda, materialText, money, participantCount, roomLabel, timeRange, uid } from './model';
 import { checkinPoint } from './scheduling';
 
 export function Live({ event, readOnly, mobile, update, openChange }) {
@@ -13,8 +13,7 @@ export function Live({ event, readOnly, mobile, update, openChange }) {
   const [progressWarning, setProgressWarning] = useState(null);
   const [scanSession, setScanSession] = useState('');
   const sessions = [...event.agenda].sort((a, b) => a.start.localeCompare(b.start));
-  const current = sessions.find(item => event.actual[item.id]?.started && !event.actual[item.id]?.ended);
-  const next = sessions.find(item => !event.actual[item.id]?.started);
+  const { current, next } = liveAgenda(event, sessions);
   function mark(session, action) {
     if (action === 'started' && current) {
       setProgressWarning({ sessionId: session.id, message: '请先结束正在进行的环节，再记录下一场开始。' });
