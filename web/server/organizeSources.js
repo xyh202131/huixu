@@ -105,7 +105,7 @@ function recordFact(groups, input, chunks) {
   option.evidence.push({ chunkId, name: chunk.name, revision: chunk.revision, location: chunk.location, excerpt });
 }
 
-export async function organizeSources(config, snapshot, isCurrent) {
+export async function organizeSources(config, snapshot, isCurrent, signal) {
   const groups = new Map();
   let covered = 0;
   let failed = 0;
@@ -126,8 +126,9 @@ export async function organizeSources(config, snapshot, isCurrent) {
     if (!isCurrent()) return null;
     const batch = unstructured.slice(offset, offset + 14);
     try {
+      const timeout = AbortSignal.timeout(45000);
       const result = await requestModel(config, {
-        system, tools, final: false, signal: AbortSignal.timeout(45000),
+        system, tools, final: false, signal: signal ? AbortSignal.any([signal, timeout]) : timeout,
         messages: [{ role: 'user', content: JSON.stringify(batch) }],
       });
       const facts = result?.calls?.filter(call => call.name === 'record_import_facts').flatMap(call => call.args?.facts ?? []);

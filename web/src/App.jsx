@@ -13,7 +13,7 @@ import { ChangePage, Schedule, Sources } from './Plan';
 import { External, ExternalForm, Preparation } from './PrepExternal';
 import { Materials, PublicEvent, Registration } from './Attendees';
 import { Live, Review } from './LiveReview';
-import { activityTypes, checkCandidate, externalRoles, initialEvents, loadEvents, makeChange, moveCandidate, newEvent, planFromText, publishChange } from './model';
+import { activityTypes, externalRoles, initialEvents, loadEvents, makeMoveChange, newEvent, planFromText, publishChange } from './model';
 
 const views = { overview: Overview, sources: Sources, schedule: Schedule, prep: Preparation, external: External,
   registration: Registration, materials: Materials, change: ChangePage, live: Live, review: Review };
@@ -242,11 +242,19 @@ function Workbench({ route, auth, useStoredEvents }) {
       draftChanges: [...(current.change ? [current.change] : []), ...(current.draftChanges ?? []).filter(item => item.id !== change.id)],
     }));
   }
-  function publish(candidate, recordMessage) {
-    if (!event.change || checkCandidate(event, event.change, candidate).length) return false;
-    update(current => publishChange(current, candidate, recordMessage));
+  function publish(candidate, recordMessage, reviewed) {
+    if (!account || publishChange(event, candidate, recordMessage, reviewed) === event) return false;
+    update(current => publishChange(current, candidate, recordMessage, reviewed));
     notify(recordMessage ? '已发布，并记录演练通知' : '已发布安排');
     return true;
+  }
+  function refreshMoveChange() {
+    update(current => {
+      const change = current.change;
+      const session = current.agenda.find(item => item.id === change?.sessionId);
+      if (!session || !change.moveRequest) return current;
+      return { ...current, change: makeMoveChange(current, session, change.moveRequest, change.reason) };
+    });
   }
   async function organize(eventId, run = true) {
     const token = (organizationRequests.current[eventId] ?? 0) + 1;
@@ -315,14 +323,15 @@ function Workbench({ route, auth, useStoredEvents }) {
     }
     const session = event.agenda.find(item => text.includes(item.title)) ??
       event.agenda.find(item => (text.includes('圆桌') && item.title.includes('圆桌')) || (text.includes('工作坊') && item.title.includes('工作坊')));
-    const room = text.match(/([ABC])\s*厅/i)?.[1].toUpperCase();
+    const closedRoom = text.match(/([ABC])\s*厅\s*(?:临时)?(?:关闭|不可用)/i)?.[1].toUpperCase();
+    const room = [...text.matchAll(/([ABC])\s*厅/gi)].map(match => match[1].toUpperCase()).find(item => item !== closedRoom);
     const time = text.match(/\b(?:[01]?\d|2[0-3]):[0-5]\d\b/)?.[0].padStart(5, '0') ?? (text.includes('午餐后') ? '13:30' : '');
     if (!session || (!room && !time)) {
       setAgentRun({ eventId: event.id, question: text, error: '本机演练支持「把圆桌移到午餐后」「把工作坊换到 B 厅」和「我想办一场 150 人的论坛」。', code: 'MODEL_NOT_CONFIGURED' });
       return;
     }
     setAgentRun(null);
-    openChange(makeChange(session, [moveCandidate(session, room || session.room, time || session.start)], 'Agent 根据本地规则生成的调整建议'));
+    openChange(makeMoveChange(event, session, { room: room || session.room, start: time || session.start, closedRoom }, 'Agent 根据本地规则生成的调整建议'));
   }
 
   async function ask(question) {
@@ -359,11 +368,11 @@ function Workbench({ route, auth, useStoredEvents }) {
       return;
     }
     setAgentRun(current => ({ ...current, proposal: null }));
-    openChange(makeChange(session, [moveCandidate(session, proposal.room, proposal.start)], '模型提出的调整建议'));
+    openChange(makeMoveChange(event, session, { room: proposal.room, start: proposal.start, closedRoom: proposal.closedRoom, earliest: proposal.earliest }, 'Agent 提出的调整建议'));
   }
 
   const sourceIssueId = path === 'sources' && routeEventId === 'issue' ? role : undefined;
-  const props = { event, readOnly, mobile, update, navigate, notify, ask, openChange, publish, copy, activateChange, openImport, importFiles, sourceIssueId,
+  const props = { event, readOnly, mobile, update, navigate, notify, ask, openChange, publish, refreshMoveChange, copy, activateChange, openImport, importFiles, sourceIssueId,
     importRun: importRuns[event?.id], memoryEvidenceId: path === 'sources' && routeEventId !== 'issue' ? routeEventId : undefined,
     organize, organizationRun: organizationRuns[event?.id] };
   if ((publicRoute || externalRoute) && !showPublic && !showExternal) return <main className="unavailable-link">

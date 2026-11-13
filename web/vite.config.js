@@ -17,7 +17,7 @@ export default defineConfig(({ mode }) => {
     server.middlewares.use('/api/model-settings', auth.requireSession(models.handle));
     server.middlewares.use('/api/agent', auth.requireSession(createAgentHandler(models.getConfig, memory)));
     server.middlewares.use('/api/project-memory', auth.requireSession(createMemoryHandler(memory)));
-    server.middlewares.use('/api/project-organization', auth.requireSession(createOrganizationHandler(models.getConfig, memory)));
+    server.middlewares.use('/api/project-organization', auth.requireSession(createOrganizationHandler(models.getOrganizationConfig, memory)));
     server.httpServer?.once('close', () => { memory.close(); auth.close(); models.close(); });
   }
   return {

@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { ArrowUp, FileText, PanelRightClose, Sparkles } from 'lucide-react';
 import { Dialog, Notice } from './interactions';
+import { checkinPoint, roomLabel, timeRange } from './scheduling';
 
 function AgentResponse({ run, ask, stop, askLocal, openSettings, reviewProposal, openSource }) {
   return <>
@@ -30,10 +31,30 @@ function AgentResponse({ run, ask, stop, askLocal, openSettings, reviewProposal,
       </button>)}
     </div>}
     {run.model && <p className="agent-evidence">模型 · {run.model}</p>}
+    {run.proposal?.kind === 'move' && run.proposal.analysis && <MoveAnalysis proposal={run.proposal} />}
     {run.proposal && <button type="button" className="button primary" onClick={reviewProposal}>
       {run.proposal.kind === 'event' ? '打开活动草稿' : '打开变更单核对'}
     </button>}
   </>;
+}
+
+function MoveAnalysis({ proposal }) {
+  const { requested, alternatives, blocked, window } = proposal.analysis;
+  const { affected } = proposal;
+  return <div className="agent-move-analysis">
+    <p><strong>原请求</strong>　{roomLabel(requested.candidate.room)} · {timeRange(requested.candidate)}</p>
+    {requested.issues.length > 0 ? <p className="muted">{requested.issues.join('、')}</p> : <p className="muted">原请求校验通过</p>}
+    {alternatives.length > 0 && <ul className="plain-list">{alternatives.map(({ candidate }) => <li key={candidate.room + candidate.start}>
+      可行备选　{roomLabel(candidate.room)} · {timeRange(candidate)} · {checkinPoint(candidate)}
+    </li>)}</ul>}
+    {requested.issues.length > 0 && !alternatives.length && <>
+      <Notice tone="warning">{timeRange(window)} 的搜索范围内暂无可行方案。</Notice>
+      {blocked.filter(({ candidate }) => candidate.room !== requested.candidate.room).slice(0, 3).map(({ candidate, issues }) =>
+        <p key={candidate.room} className="muted">{roomLabel(candidate.room)}　{issues.join('、')}</p>)}
+    </>}
+    <p className="muted">{affected.confirmed} 人已确认 · {affected.waitlisted} 人候补 · {affected.pending} 人待审核 · {affected.assignedGuides} 人已认领分场引导</p>
+    <p className="muted">原签到点　{affected.checkinBefore} · 分场已签到 {affected.checkedIn} 人。通知预览覆盖 {affected.confirmed} 位已确认观众。</p>
+  </div>;
 }
 
 export function AgentWorkspace({ id, event, account, docked, open, close, run, ask, stop, askLocal, openSettings, openAccount, reviewProposal, openSource }) {

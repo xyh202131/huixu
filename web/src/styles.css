@@ -166,6 +166,8 @@ tr[draggable="true"] { cursor: grab; }
 .radio-mark { width: 17px; height: 17px; flex: 0 0 auto; border: 1px solid var(--muted); border-radius: 50%; }
 .selection-list button[aria-pressed="true"] .radio-mark { border: 5px solid var(--accent); }
 .change-split .notice { margin-top: 10px; }
+.impact-registration-group { margin-top: 10px; overflow-wrap: anywhere; }
+.impact-registration-group p { color: var(--muted); line-height: 1.6; }
 .schedule-compare { display: grid; grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr); align-items: center; gap: 10px; margin-top: 16px; color: var(--accent); }
 .schedule-card { display: grid; gap: 8px; padding: 0 12px 12px; color: var(--ink); border: 1px solid var(--border); border-radius: 9px; overflow: hidden; }
 .schedule-card > strong { display: block; margin: 0 -12px; padding: 7px 12px; background: var(--surface-muted); }
