@@ -39,13 +39,20 @@ export function missingPlanFields(plan, unresolved = []) {
 }
 
 export function conflictEvidenceKey(fact) {
-  return JSON.stringify(fact.options.map(option => [option.value, ...option.evidence.map(item => item.chunkId).sort((a, b) => a - b)]).sort());
+  return JSON.stringify(fact.options.map(option => [option.value, ...option.evidence.toSorted((a, b) => a.chunkId - b.chunkId)
+    .map(item => item.textRevision ? `${item.chunkId}@${item.textRevision}` : item.chunkId)]).sort());
+}
+
+export function currentReviewChoice(fact, saved) {
+  const choice = saved?.[fact.key];
+  return choice?.evidence === conflictEvidenceKey(fact) ? choice : null;
 }
 
 export function reviewChoices(review, saved) {
   return Object.fromEntries(review.facts.flatMap(fact => {
-    const choice = saved?.[fact.key];
-    return fact.options.length > 1 && choice?.evidence === conflictEvidenceKey(fact) ? [[fact.key, choice.value]] : [];
+    const choice = currentReviewChoice(fact, saved);
+    if (!choice) return [];
+    return [[fact.key, choice.status === '待核对' || choice.status === '已忽略' ? null : choice.value]];
   }));
 }
 
@@ -54,7 +61,8 @@ export function planFromReview(review, choices) {
   const rows = new Map();
   for (const fact of review.facts) {
     const { section, entity, entityKey, field, key, options } = fact;
-    const selected = options.length === 1 ? options[0] : options.find(option => option.value === choices[key]);
+    let selected = options.length === 1 ? options[0] : null;
+    if (Object.hasOwn(choices, key)) selected = choices[key] ? { value: choices[key] } : null;
     if (section === 'event') {
       if (selected) plan.event[field] = selected.value;
       continue;
@@ -68,4 +76,53 @@ export function planFromReview(review, choices) {
     if (selected) rows.get(rowKey)[field] = selected.value;
   }
   return plan;
+}
+
+export function applyReviewFields(plan, review, choices, selectedKeys) {
+  const extracted = planFromReview(review, choices);
+  const next = { ...plan, event: { ...plan.event } };
+  for (const fact of review.facts) {
+    if (!selectedKeys.includes(fact.key)) continue;
+    if (fact.section === 'event') {
+      if (extracted.event[fact.field] !== undefined) next.event[fact.field] = extracted.event[fact.field];
+      continue;
+    }
+    const source = extracted[fact.section].find(row => row.id === `${fact.section}:${fact.entityKey}`);
+    if (source?.[fact.field] === undefined) continue;
+    const rows = next[fact.section] ?? [];
+    const existing = rows.find(row => row.id === source.id);
+    if (existing) next[fact.section] = rows.map(row => row.id === source.id ? { ...row, [fact.field]: source[fact.field] } : row);
+    else next[fact.section] = [...rows, { id: source.id, name: source.name, [fact.field]: source[fact.field] }];
+  }
+  return next;
+}
+
+export function rebasePlanDraft(previous, next, edited) {
+  const draft = { ...next, event: { ...next.event } };
+  for (const [field, value] of Object.entries(edited.event)) {
+    if (value !== previous.event[field]) draft.event[field] = value;
+  }
+  for (const section of Object.keys(topicPlanSections)) {
+    if (section === 'event' || !Array.isArray(edited[section])) continue;
+    const before = new Map((previous[section] ?? []).map(row => [row.id, row]));
+    const local = new Map(edited[section].map(row => [row.id, row]));
+    const rows = [];
+    for (const row of next[section] ?? []) {
+      const original = before.get(row.id);
+      const unsaved = local.get(row.id);
+      if (original && !unsaved) continue;
+      const merged = { ...row };
+      if (original && unsaved) {
+        for (const [field, value] of Object.entries(unsaved)) {
+          if (value !== original[field]) merged[field] = value;
+        }
+      }
+      rows.push(merged);
+    }
+    for (const row of edited[section]) {
+      if (!before.has(row.id) && !rows.some(item => item.id === row.id)) rows.push(row);
+    }
+    draft[section] = rows;
+  }
+  return draft;
 }

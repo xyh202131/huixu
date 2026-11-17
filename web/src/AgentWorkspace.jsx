@@ -99,7 +99,7 @@ function MoveAnalysis({ proposal, event, reviewProposal }) {
   </section>;
 }
 
-export function AgentWorkspace({ id, event, account, docked, open, close, run, ask, stop, askLocal, openSettings, openAccount, reviewProposal, openSource, openReviewedChange }) {
+export function AgentWorkspace({ id, event, account, docked, open, close, run, ask, stop, askLocal, openSettings, reviewProposal, openSource, openReviewedChange }) {
   const [input, setInput] = useState('');
   const transcript = useRef(null);
   const question = run?.question;
@@ -118,20 +118,16 @@ export function AgentWorkspace({ id, event, account, docked, open, close, run, a
   if (!docked && !open) return null;
   const content = <>
     <div className="agent-context"><FileText size={15} aria-hidden="true" /><span>{event.title}</span></div>
-    <div ref={transcript} className="agent-transcript" role="region" aria-label="Agent 对话" tabIndex={account && run ? 0 : undefined}>
-      {account ? <>
-        {run ? <AgentResponse {...{ run, event, ask, stop, askLocal, openSettings, reviewProposal, openSource, openReviewedChange }} /> :
-          <p className="muted">查询活动进展、查找资料，或准备一份议程调整草稿。</p>}
-        {!run?.pending && <div className="agent-prompts">
-          <button type="button" className="button small" onClick={() => ask('当前活动的筹备进展怎么样？')}>查看筹备进展</button>
-          <button type="button" className="button small" onClick={() => ask('列出当前活动可以引用的导入资料及其版本。')}>查看可引用资料</button>
-        </div>}
-      </> : <>
-        <p className="muted">登录后可询问议程、查询已授权的资料，或准备活动与变更草稿。</p>
-        <button type="button" className="button small" onClick={openAccount}>登录后使用 Agent</button>
-      </>}
+    <div ref={transcript} className="agent-transcript" role="region" aria-label="Agent 对话" tabIndex={run ? 0 : undefined}>
+      {run ? <AgentResponse {...{ run, event, ask, stop, askLocal, openSettings, reviewProposal, openSource, openReviewedChange }} /> :
+        <p className="muted">{account ? '查询活动进展、查找资料，或准备一份议程调整草稿。' : '配置模型后即可询问当前活动、起草方案或分析议程调整。访客草稿保留到本次页面关闭。'}</p>}
+      {!run?.pending && <div className="agent-prompts">
+        <button type="button" className="button small" onClick={() => ask('当前活动的筹备进展怎么样？')}>查看筹备进展</button>
+        {account && <button type="button" className="button small" onClick={() => ask('列出当前活动可以引用的导入资料及其版本。')}>查看可引用资料</button>}
+        <button type="button" className="button small" onClick={openSettings}>配置模型</button>
+      </div>}
     </div>
-    {account && <form className="agent-compose" onSubmit={submit}>
+    <form className="agent-compose" onSubmit={submit}>
       <textarea name="command" aria-label="对 Agent 说" placeholder="例如：创新工作坊几点开始？" maxLength={2000} rows={2} enterKeyHint="send"
         value={input} onChange={event => setInput(event.target.value)} onKeyDown={event => {
           if (event.key !== 'Enter' || event.shiftKey || event.nativeEvent.isComposing || event.keyCode === 229) return;
@@ -141,7 +137,7 @@ export function AgentWorkspace({ id, event, account, docked, open, close, run, a
       <button type="submit" className="button primary icon-button" aria-label="提交给 Agent" disabled={run?.pending || !input.trim()}>
         <ArrowUp size={18} aria-hidden="true" />
       </button>
-    </form>}
+    </form>
   </>;
 
   if (!docked) return <Dialog title="Agent 工作台" variant="drawer" className="agent-drawer" fullOnMobile close={close}>{content}</Dialog>;

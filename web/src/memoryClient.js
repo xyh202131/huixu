@@ -1,3 +1,6 @@
+import { sessionExpired } from './authClient';
+import { browserModel } from './browserModels';
+
 export { sourceAccept } from './sourceFormats';
 
 export function memoryUrl(eventId, parameters = {}) {
@@ -20,11 +23,13 @@ export function importSource(eventId, file, agentAccess) {
 }
 
 export async function organizationRequest(eventId, method = 'GET', signal) {
-  const response = await fetch('/api/project-organization?' + new URLSearchParams({ event: eventId }), { method, signal });
+  const connection = method === 'POST' ? await browserModel('organization') : null;
+  const response = await fetch('/api/project-organization?' + new URLSearchParams({ event: eventId }), {
+    method, signal, ...(connection && { headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ connection }) }),
+  });
   if (response.status === 401) window.dispatchEvent(new Event(sessionExpired));
   if (!response.headers.get('content-type')?.includes('application/json')) throw new Error('本机智能整理接口不可用。');
   const result = await response.json();
   if (!response.ok) throw new Error(result.error ?? '智能整理失败。');
   return result;
 }
-import { sessionExpired } from './authClient';

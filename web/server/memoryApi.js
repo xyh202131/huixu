@@ -18,6 +18,7 @@ export function createMemoryHandler(memory) {
     try {
       if (request.method === 'GET') {
         if (view === 'search') return sendJson(response, 200, { hits: memory.search(eventId, (url.searchParams.get('q') ?? '').slice(0, 180)) });
+        if (view === 'chunks') return sendJson(response, 200, { chunks: memory.sourceChunks(eventId, sourceId ?? '') });
         if (view === 'wiki') {
           const markdown = memory.wiki(eventId);
           if (url.searchParams.get('download') !== '1') return sendJson(response, 200, { markdown });
@@ -50,9 +51,14 @@ export function createMemoryHandler(memory) {
       }
 
       if (request.method === 'PATCH') {
-        const content = await readBody(request, 1024);
+        const content = await readBody(request, 64 * 1024);
         let input;
         try { input = content && JSON.parse(content.toString('utf8')); } catch { /* 下面统一校验字段。 */ }
+        if (sourceId && view === 'review') {
+          const source = memory.reviewSource(eventId, sourceId, input?.status, input?.note, input?.expectedVersion);
+          return sendJson(response, 200, { source });
+        }
+        if (sourceId && view === 'text') return sendJson(response, 200, memory.editExcerpt(eventId, sourceId, input ?? {}));
         if (!sourceId || typeof input?.agentAccess !== 'boolean') return sendJson(response, 400, { error: '请选择资料及引用权限。' });
         if (!memory.setAgentAccess(eventId, sourceId, input.agentAccess)) return sendJson(response, 404, { error: '该资料没有可授权的当前索引。' });
         return sendJson(response, 200, { updated: true });
@@ -80,8 +86,8 @@ export function createMemoryHandler(memory) {
       } finally {
         activeImports -= 1;
       }
-    } catch {
-      if (!response.destroyed) sendJson(response, 500, { error: '本机资料索引暂时不可用。' });
+    } catch (error) {
+      if (!response.destroyed) sendJson(response, error.status ?? 500, { error: error.status ? error.message : '本机资料索引暂时不可用。' });
     }
   };
 }

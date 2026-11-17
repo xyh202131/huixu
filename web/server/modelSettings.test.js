@@ -169,6 +169,12 @@ test('模型设置按用途启用、验收和恢复共享配置', async t => {
   } finally {
     reopened.close();
   }
+  scope.revision = 'browser-configuration';
+  const browserOrganized = await (await request('/api/project-organization?event=forum', {
+    connection: { ...custom, model: 'browser-organization', apiKey: 'fixture-browser-organization-key' },
+  })).json();
+  assert.equal(browserOrganized.review.model, 'browser-organization');
+  assert.equal(received.at(-1).key, 'fixture-browser-organization-key');
   assert.deepEqual(await (await request(organization, undefined, { method: 'DELETE' })).json(),
     { source: 'shared', active: { model: 'fixture-next', protocol: 'anthropic' } });
   assert.equal((await (await request(settings, undefined, { method: 'DELETE' })).json()).source, 'environment');

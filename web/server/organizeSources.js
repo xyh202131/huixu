@@ -102,7 +102,8 @@ function recordFact(groups, input, chunks) {
   const position = chunk.text.indexOf(raw);
   const excerpt = quote && quote.length <= 450 && quote.includes(raw) && chunk.text.includes(quote) ? quote
     : chunk.text.slice(Math.max(0, position - 100), position + raw.length + 150);
-  option.evidence.push({ chunkId, name: chunk.name, revision: chunk.revision, location: chunk.location, excerpt });
+  option.evidence.push({ chunkId, name: chunk.name, revision: chunk.revision, location: chunk.location, excerpt,
+    ...(chunk.textRevision && { textRevision: chunk.textRevision }) });
 }
 
 export async function organizeSources(config, snapshot, isCurrent, signal) {

@@ -5,8 +5,9 @@ import { Notice } from './interactions';
 import { activityTypes } from './model';
 import { Select } from './Select';
 import { createTopicEvent, referencePlan, topicActivityType } from './topicPlan';
+import { browserModel } from './browserModels';
 
-export function TopicPlanForm({ events, initialTopic, create }) {
+export function TopicPlanForm({ events, initialTopic, create, signedIn }) {
   const [pending, setPending] = useState(false);
   const [error, setError] = useState('');
   const request = useRef(null);
@@ -31,9 +32,10 @@ export function TopicPlanForm({ events, initialTopic, create }) {
     setPending(true);
     setError('');
     try {
-      const response = await fetch('/api/topic-plan', {
+      const connection = await browserModel();
+      const response = await fetch(signedIn ? '/api/topic-plan' : '/api/browser-topic-plan', {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ topic, type, audience: input.audience, slots: reference?.slots }), signal: controller.signal,
+        body: JSON.stringify({ topic, type, audience: input.audience, slots: reference?.slots, connection: connection ?? undefined }), signal: controller.signal,
       });
       if (response.status === 401) window.dispatchEvent(new Event(sessionExpired));
       const result = await response.json();

@@ -3,6 +3,7 @@ import { createAgentHandler } from './server/agent.js';
 import { createWorkbenchAuth } from './server/auth.js';
 import { createMemoryHandler } from './server/memoryApi.js';
 import { createModelSettings } from './server/modelSettings.js';
+import { createBrowserModelTest } from './server/browserModelApi.js';
 import { createOrganizationHandler } from './server/organizationApi.js';
 import { createProjectMemory } from './server/projectMemory.js';
 import { createTopicPlanHandler } from './server/topicPlanApi.js';
@@ -22,6 +23,9 @@ export default defineConfig(({ mode }) => {
     server.middlewares.use('/api/auth', auth.handle);
     server.middlewares.use('/api/workbench-session', auth.session);
     server.middlewares.use('/api/model-settings', auth.requireSession(models.handle));
+    server.middlewares.use('/api/browser-model-test', createBrowserModelTest());
+    server.middlewares.use('/api/browser-agent', createAgentHandler(() => null, null));
+    server.middlewares.use('/api/browser-topic-plan', createTopicPlanHandler(() => null));
     server.middlewares.use('/api/agent', auth.requireSession(createAgentHandler(models.getConfig, memory)));
     server.middlewares.use('/api/topic-plan', auth.requireSession(createTopicPlanHandler(models.getConfig)));
     server.middlewares.use('/api/registration', auth.requireSession(registrationOwnerApi(registrations, mail)));

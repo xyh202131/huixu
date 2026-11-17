@@ -8,6 +8,7 @@ import { Tabs } from './components';
 import { TopicPlanForm } from './TopicPlanForm';
 import { Select } from './Select';
 import { askModel } from './agentClient';
+import { describeRescueImpact } from './changeImpact';
 import { importSource, organizationRequest, sourceAccept } from './memoryClient';
 import { Overview } from './Overview';
 import { ModelSettings } from './ModelSettings';
@@ -17,7 +18,7 @@ import { Materials, PublicEvent, Registration } from './Attendees';
 import { AttendancePage, PublishedEvent } from './RegistrationPublic';
 import { ownerRegistration, useRegistrationWorkspace } from './registrationClient';
 import { rescueOperations, signupSnapshot } from './registrationRules';
-import { rescueSummary, rescueTitle } from './rescueScheduling';
+import { analyzeRescue, rescueSummary, rescueTitle, validateRescuePlan } from './rescueScheduling';
 import { Live, Review } from './LiveReview';
 import { activityTypes, externalRoles, initialEvents, loadEvents, makeMoveChange, newEvent, planFromText, publishChange, uid } from './model';
 
@@ -65,13 +66,13 @@ function ActivitySections(props) {
   });
 }
 
-function CreateEvent({ draft, events, create, close }) {
+function CreateEvent({ draft, events, create, close, signedIn }) {
   const defaults = draft?.proposal ?? planFromText(draft?.text ?? '', '行业论坛');
   const importMode = Boolean(draft?.importMode);
   const [mode, setMode] = useState(draft?.proposal || importMode ? '手动创建' : '从主题生成');
   return <Dialog title={importMode ? '导入活动项目' : '新建活动'} close={close}>
     {!importMode && <div className="create-event-tabs"><Tabs label="创建方式" items={['从主题生成', '手动创建']} value={mode} onChange={setMode} /></div>}
-    {mode === '从主题生成' ? <TopicPlanForm events={events} initialTopic={draft?.text} create={create} /> :
+    {mode === '从主题生成' ? <TopicPlanForm events={events} initialTopic={draft?.text} create={create} signedIn={signedIn} /> :
     <form className="form-stack" onSubmit={e => {
       e.preventDefault();
       const form = new FormData(e.currentTarget);
@@ -285,7 +286,7 @@ function Workbench({ route, auth, useStoredEvents }) {
     navigate(destination);
   }
   function update(transform) {
-    if (readOnly) return;
+    // 访客可预览 Agent 草稿，持久化仍由登录后的活动存储流程负责。
     setEvents(current => current.map(item => item.id === event.id ? transform(item) : item));
   }
   function openChange(change) {
@@ -310,6 +311,24 @@ function Workbench({ route, auth, useStoredEvents }) {
     return true;
   }
   async function prepareRescue(incident, previous, preferred) {
+    if (!account) {
+      const analysis = analyzeRescue(event, incident);
+      if (analysis.error) throw new Error(analysis.error);
+      const issues = preferred ? validateRescuePlan(event, analysis.incident, preferred) : [];
+      let preferredIndex = 0;
+      if (preferred && !issues.length) {
+        preferredIndex = analysis.plans.findIndex(plan => JSON.stringify(plan.moves) === JSON.stringify(preferred.moves));
+        if (preferredIndex === -1) {
+          analysis.plans.push(preferred);
+          preferredIndex = analysis.plans.length - 1;
+        }
+      }
+      analysis.plans = analysis.plans.map(plan => ({ ...plan, proof: JSON.stringify(plan.moves), impact: describeRescueImpact(event, plan) }));
+      openChange({ id: previous?.id ?? uid(), kind: 'rescue', title: rescueTitle(analysis.incident),
+        reason: rescueSummary(analysis), analysis, version: event.version, operationsKey: JSON.stringify(rescueOperations(event)),
+        preferredIndex: issues.length ? -1 : preferredIndex, invalidatedSelection: issues.length ? { moves: preferred.moves, issues } : null });
+      return;
+    }
     if (!account || !shared) throw new Error('活动服务正在读取议程，请稍后重试。');
     const operations = rescueOperations(event);
     const result = await registration.change('/rescue/preview', 'POST', {
@@ -454,7 +473,7 @@ function Workbench({ route, auth, useStoredEvents }) {
     agentRequest.current = request;
     setAgentRun({ eventId: event.id, question, pending: true });
     try {
-      const result = await askModel(question, event, request.signal);
+      const result = await askModel(question, event, request.signal, Boolean(account));
       if (!request.signal.aborted) setAgentRun({ ...result, eventId: event.id, question });
     } catch (error) {
       if (!request.signal.aborted) setAgentRun({ eventId: event.id, question, error: error.message });
@@ -538,17 +557,17 @@ function Workbench({ route, auth, useStoredEvents }) {
           </main>
           <AgentWorkspace key={event.id} id={agentId} event={event} account={account} docked={dockAgent} open={agentOpen} close={closeAgent}
             run={agentRun?.eventId === event.id ? agentRun : null} ask={ask} stop={stopAgent} askLocal={askLocal}
-            openSettings={() => showModal('settings')} openAccount={() => showModal('account')} reviewProposal={reviewProposal}
+            openSettings={() => showModal('settings')} reviewProposal={reviewProposal}
             openSource={chunkId => navigate(`sources/${chunkId}`)} openReviewedChange={id => navigate(id ? `change/released/${id}` : 'change')} />
         </div>
       </div>}
-    {modal === 'create' && <CreateEvent key={draft?.text ?? (draft?.importMode ? 'import' : 'new')} draft={draft} events={events} create={create} close={() => setModal('')} />}
+    {modal === 'create' && <CreateEvent key={draft?.text ?? (draft?.importMode ? 'import' : 'new')} draft={draft} events={events} create={create} signedIn={Boolean(account)} close={() => setModal('')} />}
     {modal === 'team' && <Dialog title="活动团队" variant="drawer" close={() => setModal('')}>
       <p className="muted">当前为本机工作台演练。以下为样例分工。</p>
       <ul className="plain-list"><li>林澄 · 活动负责人</li><li>唐悦 · 策划与统筹</li><li>顾言 · 现场总控</li></ul>
     </Dialog>}
     {modal === 'account' && <AccountDialog {...auth} openTeam={() => setModal('team')} close={() => setModal('')} />}
-    {modal === 'settings' && <ModelSettings account={account} openAccount={() => setModal('account')} close={() => setModal('')} />}
+    {modal === 'settings' && <ModelSettings close={() => setModal('')} />}
     <Toast feedback={toast} dismiss={dismissToast} />
   </>;
 }

@@ -1,10 +1,10 @@
 import { useEffect, useId, useRef, useState } from 'react';
 import { ArrowRight, Check, FileText, Sparkles } from 'lucide-react';
 import { Badge, Empty, Panel, Tabs } from './components';
-import { Notice, Popconfirm } from './interactions';
+import { Dialog, Notice, Popconfirm } from './interactions';
 import { organizationRequest } from './memoryClient';
 import { uid } from './model';
-import { conflictEvidenceKey, missingPlanFields, planFromReview, planSections, reviewChoices, topicPlanSections } from './organizationSchema';
+import { applyReviewFields, conflictEvidenceKey, currentReviewChoice, missingPlanFields, planFromReview, planSections, rebasePlanDraft, reviewChoices, topicPlanSections } from './organizationSchema';
 import { topicEventDetails } from './topicPlan';
 
 function factLabel(fact) {
@@ -14,7 +14,8 @@ function factLabel(fact) {
 
 function Evidence({ evidence, navigate }) {
   return <>
-    <p className="import-evidence-location"><FileText size={16} aria-hidden="true" /><span>{evidence.name} · v{evidence.revision} · {evidence.location}</span></p>
+    <p className="import-evidence-location"><FileText size={16} aria-hidden="true" /><span>{evidence.name} · v{evidence.revision} · {evidence.location}
+      {evidence.textRevision > 0 && ` · 人工修订 r${evidence.textRevision}`}</span></p>
     <blockquote>{evidence.excerpt}</blockquote>
     <button type="button" className="link-button" onClick={() => navigate('sources/' + evidence.chunkId, { preserveScroll: true })}>查看完整片段</button>
   </>;
@@ -24,11 +25,48 @@ function ReviewMetric({ count, label, pending }) {
   return <div className={pending ? 'review-metric pending' : 'review-metric'}><dt>{label}</dt><dd>{count}</dd></div>;
 }
 
+function fieldStatus(fact, choices) {
+  const saved = currentReviewChoice(fact, choices);
+  if (saved) return saved.status ?? '已确认';
+  return fact.options.length > 1 ? '待核对' : '已提取';
+}
+
+function FieldReviewEditor({ fact, saved, save, reset, navigate, close }) {
+  const [status, setStatus] = useState(saved?.status ?? '已确认');
+  const [value, setValue] = useState(saved?.value ?? fact.options[0]?.value ?? '');
+  const [note, setNote] = useState(saved?.note ?? '');
+  let type = 'text';
+  if (fact.field === 'date') type = 'date';
+  if (['start', 'end'].includes(fact.field)) type = 'time';
+  if (['target', 'budget', 'capacity', 'amount'].includes(fact.field)) type = 'number';
+  const manual = !fact.options.some(option => option.value === value.trim());
+  return <Dialog title={'编辑提取字段 · ' + factLabel(fact)} variant="drawer" fullOnMobile close={close}>
+    <form className="form-stack" aria-label="编辑提取字段" onSubmit={event => {
+      event.preventDefault();
+      save({ status, value: value.trim(), note: note.trim(), evidence: conflictEvidenceKey(fact) });
+    }}>
+      <Tabs label="字段核对状态" items={['待核对', '已确认', '已忽略']} value={status} onChange={setStatus} />
+      <label>采用值<input name="value" type={type} min={type === 'number' ? 0 : undefined} step={fact.field === 'amount' || fact.field === 'budget' ? '0.01' : undefined}
+        required={status === '已确认'} maxLength={240} value={value} onChange={event => setValue(event.target.value)} /></label>
+      <label>核对依据<textarea name="note" rows={3} maxLength={500} required={manual && status === '已确认'}
+        value={note} onChange={event => setNote(event.target.value)} /></label>
+      <p className="muted">可以填写新值并说明依据。标为待核对或已忽略后，该字段暂不带入新的方案草稿。</p>
+      <div className="actions"><button className="button primary">保存字段</button>
+        <button type="button" className="button" onClick={reset}>恢复提取结果</button></div>
+    </form>
+    <details open><summary>原始提取与出处</summary>{fact.options.map(option => <article className="evidence" key={option.value}>
+      <strong>{option.value}</strong>{option.evidence.map(evidence => <Evidence key={evidence.chunkId} evidence={evidence} navigate={navigate} />)}
+    </article>)}</details>
+  </Dialog>;
+}
+
 export function ImportReview({ event, update, notify, navigate, organize, organizationRun, importRun }) {
   const [snapshot, setSnapshot] = useState(null);
   const [problem, setProblem] = useState('');
   const [generating, setGenerating] = useState(false);
   const [pendingOnly, setPendingOnly] = useState(false);
+  const [editing, setEditing] = useState(null);
+  const [selectedKeys, setSelectedKeys] = useState([]);
   const conflictHeading = useRef(null);
   const refreshToken = organizationRun?.token;
 
@@ -55,18 +93,32 @@ export function ImportReview({ event, update, notify, navigate, organize, organi
   const review = snapshot?.review;
   const choices = review ? reviewChoices(review, event.organizationChoices) : {};
   const conflicts = review?.facts.filter(fact => fact.options.length > 1) ?? [];
-  const unresolved = conflicts.filter(fact => !fact.options.some(option => option.value === choices[fact.key]));
+  const unresolved = conflicts.filter(fact => !choices[fact.key] && fieldStatus(fact, event.organizationChoices) !== '已忽略');
   const visibleConflicts = pendingOnly ? unresolved : conflicts;
   const plan = review && planFromReview(review, choices);
   const missing = plan ? missingPlanFields(plan, unresolved) : [];
   const error = problem || organizationRun?.error;
+  const syncKeys = review?.facts.filter(fact => selectedKeys.includes(fact.key) &&
+    (Object.hasOwn(choices, fact.key) ? Boolean(choices[fact.key]) : fact.options.length === 1)).map(fact => fact.key) ?? [];
 
   function choose(fact, value) {
     const evidence = conflictEvidenceKey(fact);
-    update(current => ({ ...current, organizationChoices: { ...current.organizationChoices, [fact.key]: { value, evidence } } }));
+    update(current => ({ ...current, organizationChoices: { ...current.organizationChoices, [fact.key]: { value, evidence, status: '已确认' } } }));
   }
 
-  async function generate() {
+  function saveField(decision) {
+    const latest = review.facts.find(fact => fact.key === editing.key);
+    if (!latest || conflictEvidenceKey(latest) !== conflictEvidenceKey(editing)) {
+      setProblem('该字段的来源已变化，请重新打开核对。');
+      setEditing(null);
+      return;
+    }
+    update(current => ({ ...current, organizationChoices: { ...current.organizationChoices, [editing.key]: decision } }));
+    setEditing(null);
+    notify('字段状态与内容已保存');
+  }
+
+  async function generate(selectedOnly = false) {
     setGenerating(true);
     setProblem('');
     try {
@@ -77,15 +129,16 @@ export function ImportReview({ event, update, notify, navigate, organize, organi
         return;
       }
       const latestChoices = reviewChoices(latest.review, event.organizationChoices);
-      const choicesMatch = latest.review.facts.every(fact => fact.options.length === 1 || fact.options.some(option => option.value === latestChoices[fact.key]));
-      if (!choicesMatch) {
-        setSnapshot(latest);
-        setProblem('请先确认新增的冲突。');
-        return;
-      }
       const draft = { ...planFromReview(latest.review, latestChoices), id: uid(), revision: latest.review.revision };
-      update(current => ({ ...current, organizedPlan: draft }));
-      notify('已生成可编辑的方案草稿');
+      update(current => {
+        if (selectedOnly && !current.organizedPlan) return current;
+        const currentChoices = reviewChoices(latest.review, current.organizationChoices);
+        const organizedPlan = selectedOnly ? applyReviewFields(current.organizedPlan, latest.review, currentChoices, syncKeys)
+          : { ...draft, ...planFromReview(latest.review, currentChoices) };
+        return { ...current, organizedPlan };
+      });
+      if (selectedOnly) setSelectedKeys([]);
+      notify(selectedOnly ? '已更新所选字段，其余草稿内容已保留' : '已生成可编辑的方案草稿');
       navigate('schedule/plan');
     } catch (error) {
       setProblem(error.message);
@@ -120,7 +173,8 @@ export function ImportReview({ event, update, notify, navigate, organize, organi
           {pendingOnly && conflicts.length > 0 && !unresolved.length && <Empty>全部冲突已确认，可查看已采用的原文。</Empty>}
           {visibleConflicts.map(fact => <section className="import-conflict" key={fact.key} aria-label={factLabel(fact)}>
             <div className="import-conflict-head"><h3>{factLabel(fact)}</h3>
-              <Badge tone={choices[fact.key] ? 'success' : 'amber'}>{choices[fact.key] ? '已确认' : '待确认'}</Badge>
+              <div className="actions compact"><Badge tone={choices[fact.key] ? 'success' : 'amber'}>{fieldStatus(fact, event.organizationChoices)}</Badge>
+                <button type="button" className="button small" onClick={() => setEditing(fact)}>编辑状态与内容</button></div>
             </div>
             <div className="evidence-grid">{fact.options.map(option => {
               const adopted = choices[fact.key] === option.value;
@@ -147,27 +201,48 @@ export function ImportReview({ event, update, notify, navigate, organize, organi
               const facts = review.facts.filter(fact => fact.section === section);
               if (!facts.length) return null;
               return <section className="import-facts" key={section}><h3>{label}</h3><dl>
-                {facts.map(fact => <div key={fact.key}><dt>{factLabel(fact)}</dt>
+                {facts.map(fact => <div key={fact.key}><dt>{factLabel(fact)} <Badge>{fieldStatus(fact, event.organizationChoices)}</Badge></dt>
                   {fact.options.map(option => <dd key={option.value}>{option.value} <span className="import-evidence-links">
                     {option.evidence.map(evidence => <button type="button" key={evidence.chunkId} className="link-button"
                       onClick={() => navigate('sources/' + evidence.chunkId, { preserveScroll: true })}>{evidence.name} · {evidence.location}</button>)}
                   </span></dd>)}
+                  <dd><div className="actions compact">
+                    <button type="button" className="button small" onClick={() => setEditing(fact)}>编辑状态与内容</button>
+                    {event.organizedPlan && <label className="review-field-select"><input type="checkbox" aria-label={'更新草稿 · ' + factLabel(fact)}
+                      checked={syncKeys.includes(fact.key)} disabled={Object.hasOwn(choices, fact.key) && !choices[fact.key]}
+                      onChange={event => setSelectedKeys(current => event.target.checked ? [...current, fact.key] : current.filter(key => key !== fact.key))} />更新此字段到草稿</label>}
+                  </div>
+                  {currentReviewChoice(fact, event.organizationChoices) && <p className="muted">当前核对值　{choices[fact.key] || '暂不采用'}
+                    {currentReviewChoice(fact, event.organizationChoices).note && ' · ' + currentReviewChoice(fact, event.organizationChoices).note}</p>}
+                  </dd>
                 </div>)}
               </dl></section>;
             })}
           </details>
           <div className="import-review-footer">
-            {unresolved.length > 0 && <p className="muted">确认全部冲突后可以生成方案。</p>}
+            {unresolved.length > 0 && <p className="muted">未确认冲突暂留空，其余信息可以先生成草稿。</p>}
             {event.organizedPlan && <button type="button" className="button" onClick={() => navigate('schedule/plan')}>打开现有草稿</button>}
-            {event.organizedPlan && !generating && unresolved.length === 0 ?
+            {event.organizedPlan && <button type="button" className="button primary" disabled={generating || !syncKeys.length}
+              onClick={() => generate(true)}>更新所选字段（{syncKeys.length}）</button>}
+            {event.organizedPlan && !generating ?
               <Popconfirm label="用整理结果替换草稿" confirmLabel="确认替换" description="替换后，现有草稿的手工修改会被覆盖。"
                 className="button primary" onConfirm={generate} /> :
-              <button type="button" className="button primary" disabled={generating || unresolved.length > 0} onClick={generate}>
+              <button type="button" className="button primary" disabled={generating} onClick={() => generate()}>
                 {generating ? '正在生成' : '生成可编辑方案'}<ArrowRight size={17} aria-hidden="true" />
               </button>}
           </div>
         </>}
       </>}
+    {editing && <FieldReviewEditor key={editing.key} fact={editing} saved={currentReviewChoice(editing, event.organizationChoices)}
+      save={saveField} navigate={navigate} close={() => setEditing(null)} reset={() => {
+        update(current => {
+          const organizationChoices = { ...current.organizationChoices };
+          delete organizationChoices[editing.key];
+          return { ...current, organizationChoices };
+        });
+        setEditing(null);
+        notify('已恢复该字段的提取结果');
+      }} />}
   </Panel>;
 }
 
@@ -185,6 +260,15 @@ function PlanFields({ fields, data, change, topic }) {
 
 export function OrganizedPlan({ plan, update, notify, navigate }) {
   const [edited, setEdited] = useState(null);
+  const [rebased, setRebased] = useState(false);
+  const previousPlan = useRef(plan);
+  useEffect(() => {
+    const previous = previousPlan.current;
+    previousPlan.current = plan;
+    if (previous === plan || !edited) return;
+    setEdited(rebasePlanDraft(previous, plan, edited));
+    setRebased(true);
+  }, [plan]);
   const draft = edited ?? plan;
   const missing = missingPlanFields(draft);
   const dirty = edited !== null;
@@ -197,6 +281,7 @@ export function OrganizedPlan({ plan, update, notify, navigate }) {
 
   return <Panel title={topic ? '主题生成的活动方案' : '导入生成的活动方案'}
     action={<Badge tone={dirty ? 'amber' : 'neutral'}>{dirty ? '有未保存的修改' : '可编辑草稿'}</Badge>}>
+    {rebased && <Notice>资料有局部更新，未保存的手工修改已保留，请核对后保存。</Notice>}
     {topic && <div className="topic-plan-context">
       <p className="muted">{draft.model ? '由已配置的模型起草。' : '由会序的活动模板起草。'}环节时长为建议，具体时间、场地和负责人由团队确认。</p>
       {draft.reference && <p className="muted">参考《{draft.reference.title}》{draft.reference.version ? ' v' + draft.reference.version : '草稿'}，
@@ -213,6 +298,7 @@ export function OrganizedPlan({ plan, update, notify, navigate }) {
         ...current, ...(topic && !current.version ? topicEventDetails(draft.event) : {}), organizedPlan: draft,
       } : current);
       setEdited(null);
+      setRebased(false);
       notify('已保存活动方案草稿');
     }}>
       <PlanFields fields={sections.event.fields} topic={topic} data={draft.event} change={(field, value) => edit(current => ({ ...current, event: { ...current.event, [field]: value } }))} />

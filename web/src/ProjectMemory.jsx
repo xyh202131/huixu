@@ -4,6 +4,7 @@ import { Badge, Empty, Panel, Table } from './components';
 import { CheckControl, Dialog, Notice } from './interactions';
 import { memoryRequest, memoryUrl, sourceAccept } from './memoryClient';
 import { isArchiveName } from './sourceFormats';
+import { SourceEditor } from './SourceEditor';
 
 function ImportProgress({ run }) {
   const remaining = run.total - run.indexed - run.duplicates - run.errors.length;
@@ -34,6 +35,9 @@ export function ProjectMemory({ eventId, importFiles, importRun, evidenceId, onC
   const [search, setSearch] = useState(null);
   const [preview, setPreview] = useState(null);
   const [updatingSource, setUpdatingSource] = useState('');
+  const [managing, setManaging] = useState(null);
+  const replacement = useRef(null);
+  const replacementSource = useRef(null);
   const input = useRef(null);
   const dragDepth = useRef(0);
   const action = useRef(null);
@@ -92,6 +96,14 @@ export function ProjectMemory({ eventId, importFiles, importRun, evidenceId, onC
     importFiles(eventId, Array.from(files), share);
   }
 
+  function sourceUpdated(source) {
+    setActionProblem('');
+    setSources(current => current.map(row => row.id === source.id ? { ...row, ...source } : row));
+    setSearch(null);
+    setRefresh(current => current + 1);
+    onAccessChange(Boolean(source.agentAccess && source.reviewStatus !== '已停用'));
+  }
+
   return <>
     <section className={'upload-zone' + (dragging ? ' dragging' : '')} aria-label="导入活动资料" onDragOver={event => event.preventDefault()}
       onDragEnter={event => {
@@ -144,13 +156,16 @@ export function ProjectMemory({ eventId, importFiles, importRun, evidenceId, onC
           <strong>{hit.name} · v{hit.revision} · {hit.location}</strong><span>{hit.excerpt.slice(0, 240)}</span>
         </button>)}
       </div>}
-      {sources.length ? <Table headers={['资料', '索引', 'Agent 引用', '原文']}>
+      {sources.length ? <Table headers={['资料', '索引', '核对状态', 'Agent 引用', '原文与管理']}>
         {sources.map(source => <tr key={source.id}>
           <td><strong>{source.name}</strong> <Badge tone="neutral">v{source.revision}</Badge>{!source.current && <small className="field-note">历史版本</small>}</td>
           <td><Badge tone={source.state === '已索引' ? 'success' : 'amber'}>{source.state} · {source.chunkCount} 片段</Badge>{source.note && <small className="field-note">{source.note}</small>}</td>
-          <td>{source.current && source.chunkCount > 0 ? <button className="button small" disabled={Boolean(updatingSource)}
+          <td><Badge tone={source.reviewStatus === '已确认' ? 'success' : 'neutral'}>{source.reviewStatus}</Badge>
+            {source.contentVersion > 0 && <small className="field-note">人工修订 {source.contentVersion} 次</small>}</td>
+          <td>{source.current && source.chunkCount > 0 ? <button className="button small" disabled={Boolean(updatingSource) || source.reviewStatus === '已停用'}
             onClick={() => toggle(source, !source.agentAccess)}>{source.agentAccess ? '关闭 Agent 引用' : '允许 Agent 引用'}</button> : <span className="muted">—</span>}</td>
           <td><div className="actions compact">
+            {source.current && <button className="button small" disabled={busy} onClick={() => { setActionProblem(''); setManaging(source); }}>管理资料</button>}
             {source.chunkCount > 0 && <button className="button small" onClick={() => show({ view: 'excerpt', source: source.id }, setPreview)}>预览片段</button>}
             {isArchiveName(source.name) && <button className="button small" onClick={() => show({ view: 'contents', source: source.id }, setPreview)}>包内文件</button>}
             <a className="button small" href={memoryUrl(eventId, { view: 'download', source: source.id })}><Download size={14} />下载</a>
@@ -165,6 +180,7 @@ export function ProjectMemory({ eventId, importFiles, importRun, evidenceId, onC
     }}>
       {preview.excerpt && <>
         <p className="muted">v{preview.excerpt.revision} · {preview.excerpt.location}</p>
+        {preview.excerpt.textRevision > 0 && <Notice>人工修订 r{preview.excerpt.textRevision} · {preview.excerpt.editNote || '整理文字已更正'}</Notice>}
         <pre className="document-preview">{preview.excerpt.excerpt}</pre>
         <a className="button" href={memoryUrl(eventId, { view: 'download', source: preview.excerpt.sourceId })}><Download size={16} />下载原件</a>
       </>}
@@ -183,5 +199,20 @@ export function ProjectMemory({ eventId, importFiles, importRun, evidenceId, onC
         </Table> : <Empty>没有可展示的包内文件。</Empty>}
       </>}
     </Dialog>}
+    <input ref={replacement} type="file" hidden aria-label="替换单份资料" onChange={event => {
+      const file = event.target.files[0];
+      event.target.value = '';
+      const source = replacementSource.current;
+      if (!file || !source) return;
+      if (file.name.split('.').at(-1).toLowerCase() !== source.name.split('.').at(-1).toLowerCase()) {
+        setActionProblem('请使用相同格式的文件替换。其他格式可通过追加资料导入。');
+        return;
+      }
+      setActionProblem('');
+      setManaging(null);
+      importFiles(eventId, [new File([file], source.name, { type: file.type })], Boolean(source.agentAccess));
+    }} />
+    {managing && <SourceEditor key={managing.id} eventId={eventId} source={managing} problem={actionProblem} updated={sourceUpdated}
+      close={() => setManaging(null)} replace={source => { replacementSource.current = source; replacement.current.click(); }} />}
   </>;
 }

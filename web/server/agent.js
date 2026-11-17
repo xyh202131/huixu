@@ -4,6 +4,7 @@ import { analyzeRescue, rescueSummary } from '../src/rescueScheduling.js';
 import { isArchiveName } from '../src/sourceFormats.js';
 import { isLocalRequest, readBody, sendJson as send } from './localApi.js';
 import { requestModel, toolMessages } from './modelProvider.js';
+import { connectionFrom } from './modelSettings.js';
 
 const system = `你是会序活动工作台的助手，用简体中文纯文本直接回答。内部 ID 只用于工具参数。将字母会场编号按工作台写为「A 厅」「B 厅」等。
 当前议程用 read_agenda。筹备、预算、报名、现场或发布状态用 read_event_status。问资料、场地手册、历史经验或原文时用 search_project_memory，目录用 list_project_sources。
@@ -139,8 +140,9 @@ async function runModel(config, question, event, memory, signal) {
   let evidence = null;
   const citations = new Map();
   const statusReads = new Set();
+  const availableTools = memory ? tools : tools.filter(tool => !['search_project_memory', 'list_project_sources', 'list_archive_members'].includes(tool.function.name));
   for (let round = 0; round < 4; round += 1) {
-    const turn = await requestModel(config, { system, messages, tools, final: round === 3, signal });
+    const turn = await requestModel(config, { system, messages, tools: availableTools, final: round === 3, signal });
     if (!turn || turn.calls?.length > 5) break;
     if (turn.error) {
       if (proposal?.kind === 'move' || proposal?.kind === 'rescue') break;
@@ -169,11 +171,11 @@ async function runModel(config, question, event, memory, signal) {
           }
           result = { status: '导入资料，待核对', hits };
         } else if (name === 'list_project_sources' && memory) {
-          result = { sources: memory.list(event.id).filter(row => row.current && row.agentAccess && row.chunkCount).slice(0, 30)
+          result = { sources: memory.list(event.id).filter(row => row.current && row.agentAccess && row.chunkCount && row.reviewStatus !== '已停用').slice(0, 30)
             .map(({ name, revision, state, chunkCount }) => ({ name, revision, state, chunkCount })) };
         } else if (name === 'list_archive_members' && memory) {
           const archiveName = limit(args.sourceName, 200);
-          const source = isArchiveName(archiveName) && memory.list(event.id).find(row => row.current && row.agentAccess && row.chunkCount &&
+          const source = isArchiveName(archiveName) && memory.list(event.id).find(row => row.current && row.agentAccess && row.chunkCount && row.reviewStatus !== '已停用' &&
             row.name.toLowerCase() === archiveName.toLowerCase());
           const archive = source && memory.contents(event.id, source.id);
           result = archive ? { name: archive.name, revision: archive.revision, state: archive.state, total: archive.entries.length,
@@ -209,14 +211,15 @@ export function createAgentHandler(getModelConfig, memory) {
     const disconnect = new AbortController();
     response.on('close', () => disconnect.abort());
     try {
-      const config = getModelConfig();
-      if (!config) return send(response, 503, { code: 'MODEL_NOT_CONFIGURED', error: '尚未配置模型。可在工作台右上角的模型设置中添加。' });
       const body = await readBody(request, 256 * 1024);
       if (!body) return send(response, 413, { error: '活动摘要过大。' });
       let input;
       try { input = JSON.parse(body.toString('utf8')); } catch {
         return send(response, 400, { error: '请求内容无效。' });
       }
+      const { config, error } = input?.connection === undefined ? { config: getModelConfig() } : connectionFrom(input.connection);
+      if (error) return send(response, 400, { error });
+      if (!config) return send(response, 503, { code: 'MODEL_NOT_CONFIGURED', error: '尚未配置模型。可在工作台右上角的模型设置中添加。' });
       const question = limit(input?.question, 2000);
       const event = readSnapshot(input?.event);
       if (!question || !event) return send(response, 400, { error: '请提供问题和当前活动摘要。' });

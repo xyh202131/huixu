@@ -13,13 +13,21 @@ import { analyzeMove, checkinPoint, sameCandidate } from './scheduling';
 
 export function Sources({ event, readOnly, update, notify, navigate, importFiles, importRun, memoryEvidenceId, openImport, organize, organizationRun, sourceIssueId }) {
   const [selectedIssue, setSelectedIssue] = useState(sourceIssueId);
+  const [editingSource, setEditingSource] = useState(null);
   useEffect(() => { if (sourceIssueId) setSelectedIssue(sourceIssueId); }, [sourceIssueId]);
   const issue = event.issues.find(item => item.id === (sourceIssueId ?? selectedIssue)) ?? event.issues.find(item => !item.resolved) ?? event.issues[0];
-  function confirm(value) {
+  const editingIssue = editingSource?.kind === 'issue';
+  let editingStatus = editingSource?.status ?? editingSource?.record.reviewStatus ?? '待核对';
+  if (editingIssue && editingSource.status === undefined && editingSource.record.resolved) editingStatus = '已确认';
+  let editingType = 'text';
+  if (editingSource?.record.sessionId) editingType = 'time';
+  if (editingSource?.record.id === 'budget') editingType = 'number';
+  function confirm(value, target = issue, note = '') {
+    setSelectedIssue(target.id);
     update(current => ({
       ...current,
-      budget: issue.id === 'budget' ? Number(value) : current.budget,
-      issues: current.issues.map(item => item.id === issue.id ? { ...item, resolved: value } : item),
+      budget: target.id === 'budget' && value ? Number(value) : current.budget,
+      issues: current.issues.map(item => item.id === target.id ? { ...item, resolved: value, resolutionNote: note } : item),
     }));
     notify('已保存到计划草稿');
   }
@@ -27,6 +35,7 @@ export function Sources({ event, readOnly, update, notify, navigate, importFiles
     <PageHead heading="h2" title="资料与确认" description={readOnly ? '浏览活动资料，对照有冲突的原文。' : '批量导入资料，建立活动索引，核对原文。'}>
       {!readOnly && <button className="button" onClick={openImport}>导入为新活动</button>}
     </PageHead>
+    {readOnly && <Notice>当前为示例资料，核对修改保留在本次页面中。</Notice>}
     {event.issues.length > 0 && <Panel title="资料待确认">
       <div className="selection-list">{event.issues.map(item => <button key={item.id} aria-pressed={item.id === issue?.id} onClick={() => navigate('sources/issue/' + item.id)}>
         <span>{item.title}</span><Badge tone={item.resolved ? 'success' : 'amber'}>{item.resolved ? '已确认' : '待核对'}</Badge>
@@ -37,8 +46,13 @@ export function Sources({ event, readOnly, update, notify, navigate, importFiles
         <div className="evidence-grid">{issue.choices.map(choice => <article key={choice.file} className="evidence">
           <div className="file-title"><FileText size={18} /><strong>{choice.file}</strong></div><p className="muted">{choice.location}</p>
           <blockquote>{choice.quote}</blockquote>
-          {!readOnly && <button className="button" onClick={() => confirm(choice.value)} disabled={issue.resolved === choice.value}>采用 {issue.id === 'budget' ? money(choice.value) : choice.value}</button>}
+          <button className="button" onClick={() => confirm(choice.value)} disabled={issue.resolved === choice.value}>采用 {issue.id === 'budget' ? money(choice.value) : choice.value}</button>
         </article>)}</div>
+        {issue.resolutionNote && <p className="muted">核对依据　{issue.resolutionNote}</p>}
+        <div className="actions">
+          <button className="button" type="button" onClick={() => setEditingSource({ kind: 'issue', record: issue })}>修改状态与内容</button>
+          {issue.resolved && <button className="button" type="button" onClick={() => confirm(null)}>重新标为待核对</button>}
+        </div>
         {issue.resolved && issue.sessionId && <div className="actions publish-actions">
           <LinkButton onClick={() => navigate('schedule')}>查看议程中的草稿时间</LinkButton>
         </div>}
@@ -50,10 +64,37 @@ export function Sources({ event, readOnly, update, notify, navigate, importFiles
     </ProjectMemory>}
     {event.files.length > 0 && <details className="activity-file-history">
       <summary>样例与旧资料登记（{event.files.length}）</summary>
-      <Table headers={['文件', '状态']}>{event.files.map(file => <tr key={file.id}>
-        <td>{file.name}</td><td><Badge tone={file.status.startsWith('样例') ? 'success' : 'neutral'}>{file.status}</Badge></td>
+      <Table headers={['文件', '解析状态', '核对状态', '操作']}>{event.files.map(file => <tr key={file.id}>
+        <td>{file.name}{file.reviewNote && <small className="field-note">{file.reviewNote}</small>}</td><td><Badge tone={file.status.startsWith('样例') ? 'success' : 'neutral'}>{file.status}</Badge></td>
+        <td><Badge>{file.reviewStatus ?? '待核对'}</Badge></td>
+        <td><button type="button" className="button small" onClick={() => setEditingSource({ kind: 'file', record: file })}>修改核对状态</button></td>
       </tr>)}</Table>
     </details>}
+    {editingSource && <Dialog title={editingSource.kind === 'issue' ? '核对资料 · ' + editingSource.record.field : '核对资料 · ' + editingSource.record.name}
+      variant="drawer" fullOnMobile close={() => setEditingSource(null)}>
+      <form className="form-stack" aria-label="修改资料核对结果" onSubmit={event => {
+        event.preventDefault();
+        const form = new FormData(event.currentTarget);
+        const note = String(form.get('note') ?? '').trim();
+        if (editingSource.kind === 'issue') {
+          const value = String(form.get('value') ?? '').trim();
+          confirm(form.get('status') === '已确认' ? value : null, editingSource.record, note);
+        } else {
+          update(current => ({ ...current, files: current.files.map(file => file.id === editingSource.record.id
+            ? { ...file, reviewStatus: form.get('status'), reviewNote: note } : file) }));
+          notify('资料核对状态已保存');
+        }
+        setEditingSource(null);
+      }}>
+        <Select label="核对状态" name="status" value={editingStatus} onChange={status => setEditingSource(current => ({ ...current, status }))}
+          options={editingSource.kind === 'issue' ? ['待核对', '已确认'] : ['待核对', '已确认', '已停用']} />
+        {editingSource.kind === 'issue' && <label>采用内容<input name="value" maxLength={240}
+          type={editingType} min={0} step={editingType === 'number' ? '0.01' : undefined} required={editingStatus === '已确认'}
+          defaultValue={editingSource.record.resolved ?? ''} /></label>}
+        <label>核对依据<textarea name="note" rows={3} maxLength={500} defaultValue={editingSource.record.resolutionNote ?? editingSource.record.reviewNote ?? ''} /></label>
+        <button className="button primary">保存核对结果</button>
+      </form>
+    </Dialog>}
   </>;
 }
 

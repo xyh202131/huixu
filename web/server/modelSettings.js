@@ -14,7 +14,7 @@ function publicConfig({ provider, protocol, baseUrl, model, keyHeader, key, revi
   return { provider, protocol, baseUrl, model, keyHeader, hasKey: Boolean(key), revision };
 }
 
-function connectionFrom(input, saved) {
+export function connectionFrom(input, saved) {
   const provider = input?.provider;
   const preset = typeof provider === 'string' && Object.hasOwn(modelPresets, provider) ? modelPresets[provider] : null;
   if (provider !== 'custom' && !preset) return { error: '请选择模型服务商。' };
@@ -48,7 +48,7 @@ const testTools = [{ type: 'function', function: {
   parameters: { type: 'object', properties: {}, additionalProperties: false },
 } }];
 
-async function testConnection(config, signal) {
+export async function testConnection(config, signal) {
   const system = '这是会序的模型连接测试。请先调用 verify_connection，再根据工具结果简短回复。';
   const messages = [{ role: 'user', content: '请调用 verify_connection 检查连接。' }];
   const first = await requestModel(config, { system, messages, tools: testTools, signal });
@@ -60,7 +60,7 @@ async function testConnection(config, signal) {
   return second?.error || (second?.answer ? '' : '模型未能读取工具结果并完成应答。');
 }
 
-async function testOrganization(config, signal) {
+export async function testOrganization(config, signal) {
   const starts = ['14:00', '14:30'];
   const chunks = starts.map((start, index) => ({
     chunkId: index + 1, name: ['演练议程.pdf', '演练海报.png'][index], revision: 1, location: '第 1 页',
