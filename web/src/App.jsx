@@ -4,6 +4,8 @@ import { AgentWorkspace } from './AgentWorkspace';
 import { AccountAvatar, AccountDialog, useWorkbenchSession } from './Auth';
 import { ActivityDirectory, chapterFor, chapters, jumpToActivity } from './ActivityNavigation';
 import { Dialog, mobileLayoutQuery, Toast, Tooltip } from './interactions';
+import { Tabs } from './components';
+import { TopicPlanForm } from './TopicPlanForm';
 import { Select } from './Select';
 import { askModel } from './agentClient';
 import { importSource, organizationRequest, sourceAccept } from './memoryClient';
@@ -12,8 +14,12 @@ import { ModelSettings } from './ModelSettings';
 import { ChangePage, Schedule, Sources } from './Plan';
 import { External, ExternalForm, Preparation } from './PrepExternal';
 import { Materials, PublicEvent, Registration } from './Attendees';
+import { AttendancePage, PublishedEvent } from './RegistrationPublic';
+import { ownerRegistration, useRegistrationWorkspace } from './registrationClient';
+import { rescueOperations, signupSnapshot } from './registrationRules';
+import { rescueSummary, rescueTitle } from './rescueScheduling';
 import { Live, Review } from './LiveReview';
-import { activityTypes, externalRoles, initialEvents, loadEvents, makeMoveChange, newEvent, planFromText, publishChange } from './model';
+import { activityTypes, externalRoles, initialEvents, loadEvents, makeMoveChange, newEvent, planFromText, publishChange, uid } from './model';
 
 const views = { overview: Overview, sources: Sources, schedule: Schedule, prep: Preparation, external: External,
   registration: Registration, materials: Materials, change: ChangePage, live: Live, review: Review };
@@ -59,10 +65,13 @@ function ActivitySections(props) {
   });
 }
 
-function CreateEvent({ draft, create, close }) {
+function CreateEvent({ draft, events, create, close }) {
   const defaults = draft?.proposal ?? planFromText(draft?.text ?? '', '行业论坛');
   const importMode = Boolean(draft?.importMode);
+  const [mode, setMode] = useState(draft?.proposal || importMode ? '手动创建' : '从主题生成');
   return <Dialog title={importMode ? '导入活动项目' : '新建活动'} close={close}>
+    {!importMode && <div className="create-event-tabs"><Tabs label="创建方式" items={['从主题生成', '手动创建']} value={mode} onChange={setMode} /></div>}
+    {mode === '从主题生成' ? <TopicPlanForm events={events} initialTopic={draft?.text} create={create} /> :
     <form className="form-stack" onSubmit={e => {
       e.preventDefault();
       const form = new FormData(e.currentTarget);
@@ -89,15 +98,22 @@ function CreateEvent({ draft, create, close }) {
         <p className="muted">导入会建立本机索引。允许引用时，Agent 会将整理所需的文字片段发送给已配置的模型。</p>
       </>}
       <button className="button primary">{importMode ? '创建活动并建立索引' : '生成活动草稿'}</button>
-    </form>
+    </form>}
   </Dialog>;
 }
 
 export function App() {
   const route = useRoute();
+  const [path, id] = route;
+  if (path === 'attendance') return <AttendancePage key={id} token={id} />;
+  if (path === 'public') return <PublishedEvent key={id} publicId={id} />;
+  return <WorkspaceApp route={route} />;
+}
+
+function WorkspaceApp({ route }) {
   const auth = useWorkbenchSession();
   const [path, eventId, role] = route;
-  const guestLink = Boolean(eventId) && (path === 'public' || (path === 'external' && Object.hasOwn(externalRoles, role)));
+  const guestLink = Boolean(eventId) && path === 'external' && Object.hasOwn(externalRoles, role);
   const account = auth.session.user;
   return <Workbench key={account?.id ?? (guestLink ? 'guest-link' : 'preview')} route={route} auth={auth}
     useStoredEvents={Boolean(account || guestLink)} />;
@@ -133,10 +149,38 @@ function Workbench({ route, auth, useStoredEvents }) {
   const chapter = chapterFor(page);
   const pageLabel = chapter.subsections?.find(section => section.id === page)?.label ?? chapter.label;
   const externalRoute = path === 'external' && Boolean(routeEventId);
-  const publicRoute = path === 'public' && Boolean(routeEventId);
-  const event = events.find(item => item.id === (externalRoute || publicRoute ? routeEventId : activeId)) ?? events[0];
+  const publicRoute = path === 'preview-event' && Boolean(routeEventId);
+  const localEvent = events.find(item => item.id === (externalRoute || publicRoute ? routeEventId : activeId)) ?? events[0];
+  const registration = useRegistrationWorkspace(Boolean(account), localEvent);
+  const shared = registration.current;
+  let event = localEvent;
+  if (shared) {
+    const checkins = new Map([...localEvent.checkins, ...shared.checkins].map(entry => [JSON.stringify([entry.personId, entry.sessionId]), entry]));
+    event = { ...localEvent, attendees: shared.people, formOpen: shared.event.formOpen, checkins: [...checkins.values()] };
+    if (shared.operations) {
+      const actual = { ...localEvent.actual, ...shared.operations.actual };
+      const replies = new Map([...shared.operations.replies, ...localEvent.replies].map(reply => [reply.id, reply]));
+      event = { ...event, actual, replies: [...replies.values()], onsite: event.onsite || Object.values(actual).some(item => item.started) };
+    }
+    if (shared.event.version > 0 && shared.event.version >= localEvent.version) {
+      event = { ...event, ...shared.event, agenda: shared.event.agenda.map(session => ({
+        ...localEvent.agenda.find(item => item.id === session.id), ...session,
+      })) };
+    }
+    const releases = shared.rescueReleases ?? [];
+    if (releases.length) {
+      const ids = new Set(releases.map(item => item.id));
+      const history = [...releases, ...localEvent.history.filter(item => !ids.has(item.id))].sort((a, b) => b.version - a.version);
+      const messages = releases.flatMap(release => release.notices.map((notice, index) => ({
+        id: release.id + '-' + index, channel: '救场通知草稿', subject: release.title + ' · ' + notice.role, body: notice.body,
+        count: notice.recipients.length, version: release.version, date: release.date,
+      })));
+      event = { ...event, history, messages: [...messages, ...event.messages], change: ids.has(event.change?.id) ? null : event.change,
+        draftChanges: (event.draftChanges ?? []).filter(item => !ids.has(item.id)) };
+    }
+  }
   const showExternal = externalRoute && event?.id === routeEventId && Object.hasOwn(externalRoles, role);
-  const showPublic = publicRoute && event?.id === routeEventId;
+  const showPublic = publicRoute && Boolean(account) && event?.id === routeEventId;
   const pageTitle = showExternal || showPublic ? event.title : externalRoute || publicRoute ? '活动链接不可用' : pageLabel;
 
   useEffect(() => {
@@ -153,6 +197,22 @@ function Workbench({ route, auth, useStoredEvents }) {
     window.addEventListener('storage', sync);
     return () => window.removeEventListener('storage', sync);
   }, [useStoredEvents]);
+  useEffect(() => {
+    if (!account) return;
+    const controller = new AbortController();
+    ownerRegistration('', 'GET', undefined, controller.signal).then(({ events: saved }) => {
+      if (controller.signal.aborted) return;
+      setEvents(current => {
+        const loaded = saved.filter(item => !current.some(local => local.id === item.id));
+        if (!loaded.length) return current;
+        return [...current, ...loaded.map(item => ({
+          ...newEvent(item, item.id), ...item, tasks: [],
+          agenda: item.agenda.map(session => ({ guest: '待确认', equipment: [], ...session })),
+        }))];
+      });
+    }).catch(() => {});
+    return () => controller.abort();
+  }, [account?.id]);
   useEffect(() => {
     document.title = pageTitle + ' · 会序';
   }, [pageTitle]);
@@ -242,11 +302,39 @@ function Workbench({ route, auth, useStoredEvents }) {
       draftChanges: [...(current.change ? [current.change] : []), ...(current.draftChanges ?? []).filter(item => item.id !== change.id)],
     }));
   }
-  function publish(candidate, recordMessage, reviewed) {
-    if (!account || publishChange(event, candidate, recordMessage, reviewed) === event) return false;
-    update(current => publishChange(current, candidate, recordMessage, reviewed));
+  async function publish(candidate, recordMessage, reviewed) {
+    const next = publishChange(event, candidate, recordMessage, reviewed);
+    if (!account || !shared || next === event) return false;
+    await registration.change('/schedule', 'PATCH', { revision: shared.revision, event: signupSnapshot(next) });
+    update(current => ({ ...current, agenda: next.agenda, version: next.version, change: next.change, history: next.history, messages: next.messages }));
     notify(recordMessage ? '已发布，并记录演练通知' : '已发布安排');
     return true;
+  }
+  async function prepareRescue(incident, previous, preferred) {
+    if (!account || !shared) throw new Error('活动服务正在读取议程，请稍后重试。');
+    const operations = rescueOperations(event);
+    const result = await registration.change('/rescue/preview', 'POST', {
+      revision: shared.revision, incident, operations,
+    });
+    const { analysis, state } = result;
+    const preferredIndex = preferred ? analysis.plans.findIndex(plan => JSON.stringify(plan.moves) === JSON.stringify(preferred.moves)) : -1;
+    const change = { id: previous?.id ?? uid(), kind: 'rescue', title: rescueTitle(analysis.incident),
+      reason: rescueSummary(analysis), analysis, revision: state.revision, version: state.event.version,
+      operationsKey: JSON.stringify(operations), preferredIndex: Math.max(0, preferredIndex) };
+    if (previous) update(current => current.change?.id === previous.id ? { ...current, change } : current);
+    else openChange(change);
+    setAgentRun({ eventId: event.id, question: change.title, answer: change.reason,
+      evidence: { title: event.title, version: change.version }, reviewChangeId: change.id });
+  }
+  async function releaseRescue(change, option) {
+    if (!account || !shared) throw new Error('活动服务暂不可用。');
+    if (change.operationsKey !== JSON.stringify(rescueOperations(event))) throw new Error('现场或人员资料有更新，请重新计算。');
+    const updated = await registration.change('/rescue/publish', 'POST', {
+      changeId: change.id, revision: change.revision, incident: change.analysis.incident, moves: option.moves, proof: option.proof,
+    });
+    update(current => ({ ...current, change: current.change?.id === change.id ? null : current.change }));
+    notify('整场调整已发布 · v' + updated.event.version + '，已生成通知草稿');
+    navigate('change/released/' + change.id);
   }
   function refreshMoveChange() {
     update(current => {
@@ -318,12 +406,12 @@ function Workbench({ route, auth, useStoredEvents }) {
     setModal('create');
   }
 
-  function create(next, files = [], agentAccess = false) {
+  function create(next, files = [], agentAccess = false, message = '已创建可编辑的活动草稿') {
     setEvents(current => [...current, next]);
     setModal('');
-    select(next.id, files.length ? 'sources' : 'overview');
+    select(next.id, files.length ? 'sources' : next.organizedPlan?.topicPlan ? 'schedule/plan' : 'overview');
     if (files.length) importFiles(next.id, files, agentAccess);
-    notify('已创建可编辑的活动草稿');
+    notify(message);
   }
   function copy() {
     const next = newEvent({ title: event.title + '（副本）', type: event.type, date: '', capacity: event.capacity });
@@ -337,6 +425,7 @@ function Workbench({ route, auth, useStoredEvents }) {
       showModal('create');
       return;
     }
+    if (requestWholeClosure(text)) return;
     const session = event.agenda.find(item => text.includes(item.title)) ??
       event.agenda.find(item => (text.includes('圆桌') && item.title.includes('圆桌')) || (text.includes('工作坊') && item.title.includes('工作坊')));
     const closedRoom = text.match(/([ABC])\s*厅\s*(?:临时)?(?:关闭|不可用)/i)?.[1].toUpperCase();
@@ -350,8 +439,21 @@ function Workbench({ route, auth, useStoredEvents }) {
     openChange(makeMoveChange(event, session, { room: room || session.room, start: time || session.start, closedRoom }, 'Agent 根据本地规则生成的调整建议'));
   }
 
+  function requestWholeClosure(question) {
+    if (!account || !/(整场|全场|多环节|两个环节|2\s*个环节)/.test(question) || !/(关闭|停用|不可用)/.test(question)) return false;
+    const explicitRoom = event.rooms.find(item => question.includes(item.id + '厅') || question.includes(item.id + ' 厅'));
+    const sampleMainRoom = event.isSample && question.includes('主会场') && event.rooms.find(item => item.id === 'A');
+    const room = explicitRoom || sampleMainRoom;
+    const times = [...question.matchAll(/\b(?:[01]\d|2[0-3]):[0-5]\d\b/g)].map(match => match[0]);
+    if (!room || times.length !== 2) return false;
+    void prepareRescue({ kind: 'closure', room: room.id, at: times[0], until: times[1] }).catch(error =>
+      setAgentRun({ eventId: event.id, question, error: error.message }));
+    return true;
+  }
+
   async function ask(question) {
     agentRequest.current?.abort();
+    if (requestWholeClosure(question)) return;
     const request = new AbortController();
     agentRequest.current = request;
     setAgentRun({ eventId: event.id, question, pending: true });
@@ -377,6 +479,12 @@ function Workbench({ route, auth, useStoredEvents }) {
       showModal('create');
       return;
     }
+    if (proposal.kind === 'rescue') {
+      if (proposal.eventId !== event.id) return;
+      void prepareRescue(proposal.analysis.incident, null, candidate).catch(error =>
+        setAgentRun(current => ({ ...current, error: error.message })));
+      return;
+    }
     const before = proposal.before;
     const session = event.agenda.find(item => item.id === before.id);
     if (proposal.eventId !== event.id || !session || session.start !== before.start || session.end !== before.end || session.room !== before.room) {
@@ -391,7 +499,9 @@ function Workbench({ route, auth, useStoredEvents }) {
   }
 
   const sourceIssueId = path === 'sources' && routeEventId === 'issue' ? role : undefined;
-  const props = { event, readOnly, mobile, update, navigate, notify, ask, openChange, publish, refreshMoveChange, copy, activateChange, openImport, importFiles, sourceIssueId,
+  const props = { event, readOnly, mobile, update, navigate, notify, ask, openChange, publish, prepareRescue, releaseRescue,
+    refreshMoveChange, copy, activateChange, openImport, importFiles, sourceIssueId, registration,
+    showDesignMaterials: path === 'materials' && routeEventId === 'design',
     importRun: importRuns[event?.id], memoryEvidenceId: path === 'sources' && routeEventId !== 'issue' ? routeEventId : undefined,
     releasedChangeId: path === 'change' && routeEventId === 'released' ? role : undefined,
     organize, organizationRun: organizationRuns[event?.id] };
@@ -399,7 +509,7 @@ function Workbench({ route, auth, useStoredEvents }) {
     <h1>活动链接不可用</h1><p className="muted">请向活动负责人索取当前链接。</p>
   </main>;
   return <>
-    {showExternal ? <ExternalForm key={routeEventId + role} {...props} role={role} /> : showPublic ? <PublicEvent key={routeEventId} {...props} /> :
+    {showExternal ? <ExternalForm key={routeEventId + role} {...props} role={role} /> : showPublic ? <PublicEvent key={routeEventId} event={event} preview /> :
       <div className="activity-shell">
         <a className="skip-link" href="#workbench" onClick={e => { e.preventDefault(); document.getElementById('workbench').focus(); }}>跳转到工作台内容</a>
         <header className="activity-topbar">
@@ -436,7 +546,7 @@ function Workbench({ route, auth, useStoredEvents }) {
             openSource={chunkId => navigate(`sources/${chunkId}`)} openReviewedChange={id => navigate(id ? `change/released/${id}` : 'change')} />
         </div>
       </div>}
-    {modal === 'create' && <CreateEvent draft={draft} create={create} close={() => setModal('')} />}
+    {modal === 'create' && <CreateEvent key={draft?.text ?? (draft?.importMode ? 'import' : 'new')} draft={draft} events={events} create={create} close={() => setModal('')} />}
     {modal === 'team' && <Dialog title="活动团队" variant="drawer" close={() => setModal('')}>
       <p className="muted">当前为本机工作台演练。以下为样例分工。</p>
       <ul className="plain-list"><li>林澄 · 活动负责人</li><li>唐悦 · 策划与统筹</li><li>顾言 · 现场总控</li></ul>

@@ -72,6 +72,42 @@
 .activity-file-history > summary { cursor: pointer; min-height: 32px; font-weight: 650; }
 .activity-file-history[open] > summary { margin-bottom: 8px; }
 
+.create-event-tabs .tabs { width: 100%; }
+.topic-plan-help, .topic-plan-context p, .design-materials p.muted { margin: 0; }
+.topic-plan-details .form-grid { margin-bottom: 12px; }
+.topic-plan-context { display: grid; gap: 6px; margin-bottom: 15px; overflow-wrap: anywhere; }
+.plan-missing { flex-basis: 100%; color: var(--muted); }
+.plan-missing summary { cursor: pointer; padding-block: 5px; }
+.plan-missing ul { max-height: 135px; overflow: auto; margin: 3px 0 0; padding-inline-start: 22px; }
+.design-materials { container-type: inline-size; }
+.design-materials .panel-head { flex-wrap: wrap; }
+.design-prompt-grid { display: grid; gap: 16px; align-items: start; }
+.design-prompt-options, .design-prompt-preview { min-width: 0; }
+.design-prompt-options > .link-button { justify-self: start; }
+.design-prompt-heading { display: flex; gap: 8px; align-items: center; justify-content: space-between; flex-wrap: wrap; }
+.design-prompt-heading label { scroll-margin-top: calc(var(--activity-header) + 12px); }
+.design-prompt-preview textarea {
+  min-height: 245px; font-family: inherit; line-height: 1.65; background: var(--surface-muted);
+}
+.registration-toolbar { margin-bottom: 12px; }
+.registration-editor-links { padding-top: 14px; border-top: 1px solid var(--border); }
+.registration-editor-links h3 { margin: 0; }
+.registration-email-details { display: grid; grid-template-columns: max-content minmax(0, 1fr); gap: 8px 16px; margin: 0; }
+.registration-email-details dt { color: var(--muted); }
+.registration-email-details dd { margin: 0; overflow-wrap: anywhere; }
+.attendance-page { max-width: 610px; margin: 0 auto; padding: max(22px, env(safe-area-inset-top)) max(14px, env(safe-area-inset-right)) 28px max(14px, env(safe-area-inset-left)); }
+.attendance-title { padding: 20px; margin-bottom: 14px; border: 1px solid var(--border); border-radius: 14px; background: var(--surface-hover); }
+.attendance-title h1 { margin: 8px 0; font-size: clamp(25px, 6vw, 36px); overflow-wrap: anywhere; }
+.attendance-title p { display: flex; gap: 7px; flex-wrap: wrap; align-items: center; margin: 0; }
+.attendance-page p { margin-block: 0; }
+.attendance-actions .button { min-height: 44px; }
+.rescue-notices { display: grid; gap: 10px; }
+#activity-change .panel > .import-review-detail + :is(details, .selection-list),
+#activity-change .panel > .selection-list + .import-review-detail { margin-top: 12px; }
+@container (min-width: 520px) {
+  .design-prompt-grid { grid-template-columns: minmax(190px, .8fr) minmax(0, 1.7fr); }
+}
+
 .activity-workspace .overview-event {
   align-items: flex-end; flex-wrap: wrap; gap: 17px; min-height: 164px; padding: 22px 25px;
 }

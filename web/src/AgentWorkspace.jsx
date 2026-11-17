@@ -3,6 +3,7 @@ import { ArrowUp, FileText, PanelRightClose, Sparkles } from 'lucide-react';
 import { Badge } from './components';
 import { Dialog, Notice } from './interactions';
 import { checkinPoint, roomLabel, timeRange } from './scheduling';
+import { RescueBlockers } from './RescueChange';
 
 function AgentResponse({ run, event, ask, stop, askLocal, openSettings, reviewProposal, openSource, openReviewedChange }) {
   const released = run.reviewChangeId && event.history.find(change => change.id === run.reviewChangeId);
@@ -38,6 +39,7 @@ function AgentResponse({ run, event, ask, stop, askLocal, openSettings, reviewPr
     </details>}
     {run.model && <p className="agent-evidence">模型 · {run.model}</p>}
     {run.proposal?.kind === 'move' && run.proposal.analysis && <MoveAnalysis proposal={run.proposal} event={event} reviewProposal={reviewProposal} />}
+    {run.proposal?.kind === 'rescue' && <RescueProposal proposal={run.proposal} reviewProposal={reviewProposal} />}
     {run.proposal?.kind === 'event' && <button type="button" className="button primary" onClick={() => reviewProposal()}>打开活动草稿</button>}
     {released && <>
       <Notice tone="success" announce>{released.title}已发布 · v{released.version}</Notice>
@@ -45,6 +47,21 @@ function AgentResponse({ run, event, ask, stop, askLocal, openSettings, reviewPr
     </>}
     {run.reviewChangeId && run.reviewChangeId === event.change?.id && <button type="button" className="button small" onClick={() => openReviewedChange()}>查看待发布变更单</button>}
   </>;
+}
+
+function RescueProposal({ proposal, reviewProposal }) {
+  const { analysis } = proposal;
+  const [index, setIndex] = useState(0);
+  return <section className="agent-move-analysis" aria-label="整场救场分析">
+    <h3>{analysis.affected.length} 个受影响环节</h3>
+    {analysis.plans.length > 0 && <div className="selection-list">{analysis.plans.map((plan, position) =>
+      <button type="button" key={position} aria-pressed={index === position} onClick={() => setIndex(position)}>
+        <strong>{position ? '备选 ' + position : '推荐方案'}</strong><Badge tone="success">组合校验通过</Badge>
+        <span className="choice-note">{plan.moves.map(move => roomLabel(move.room) + ' ' + timeRange(move)).join(' · ')}</span>
+      </button>)}</div>}
+    <RescueBlockers analysis={analysis} />
+    <button type="button" className="button primary" onClick={() => reviewProposal(analysis.plans[index])}>打开整场变更单核对</button>
+  </section>;
 }
 
 function MoveAnalysis({ proposal, event, reviewProposal }) {

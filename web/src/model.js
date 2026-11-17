@@ -1,4 +1,5 @@
 import { changeReviewKey, describeChangeImpact, sessionPosts } from './changeImpact.js';
+import { reservesSeat } from './registrationRules.js';
 import { analyzeMove, checkCandidate, checkinPoint, clock, minutes, moveCandidate, roomLabel, sameCandidate, sessionPeople, timeRange } from './scheduling.js';
 
 export { checkCandidate, clock, minutes, moveCandidate, roomLabel, timeRange } from './scheduling.js';
@@ -100,7 +101,7 @@ export function money(value) {
 }
 
 export function participantCount(event, sessionId) {
-  return event.attendees.filter(person => person.status === '已确认' && (!sessionId || person.sessionId === sessionId)).length;
+  return event.attendees.filter(person => reservesSeat(person) && (!sessionId || person.sessionId === sessionId)).length;
 }
 
 export function liveAgenda(event, sessions) {
@@ -173,7 +174,7 @@ export function planFromText(text, fallbackType) {
 }
 
 export function materialText(event, kind) {
-  const lines = [...event.agenda].sort((a, b) => a.start.localeCompare(b.start)).map(session => {
+  const lines = event.agenda.toSorted((a, b) => a.start.localeCompare(b.start)).map(session => {
     const time = timeRange(session) + ' · ' + roomLabel(session.room);
     if (kind === '嘉宾行程') return time + '｜' + session.guest + ' · ' + session.title;
     if (kind === '主持稿') return time + '\n各位来宾，接下来是「' + session.title + '」，有请' + session.guest + '。';

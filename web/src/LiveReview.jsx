@@ -1,50 +1,69 @@
 import { useState } from 'react';
-import { AlertTriangle, ArrowRightLeft, ClipboardCheck, Monitor, ScanLine } from 'lucide-react';
+import { AlertTriangle, ClipboardCheck, Monitor, ScanLine } from 'lucide-react';
 import { Badge, Empty, IconTile, PageHead, Panel, Table } from './components';
 import { Dialog, MetricValue, Notice } from './interactions';
 import { Select } from './Select';
-import { incidentChange, incidentKinds, liveAgenda, materialText, money, participantCount, roomLabel, timeRange, uid } from './model';
+import { liveAgenda, materialText, money, participantCount, roomLabel, timeRange, uid } from './model';
 import { checkinPoint } from './scheduling';
+import { RescueIncidentForm } from './RescueChange';
+import { rescueOperations } from './registrationRules';
 
-export function Live({ event, readOnly, mobile, update, openChange }) {
+export function Live({ event, readOnly, mobile, prepareRescue, registration }) {
   const [board, setBoard] = useState(false);
   const [report, setReport] = useState(false);
   const [scanResult, setScanResult] = useState(null);
   const [progressWarning, setProgressWarning] = useState(null);
   const [scanSession, setScanSession] = useState('');
-  const sessions = [...event.agenda].sort((a, b) => a.start.localeCompare(b.start));
+  const [scanning, setScanning] = useState(false);
+  const [recording, setRecording] = useState(false);
+  const sessions = event.agenda.toSorted((a, b) => a.start.localeCompare(b.start));
   const { current, next } = liveAgenda(event, sessions);
-  function mark(session, action) {
+  async function mark(session, action) {
+    if (!registration.current || recording) return;
     if (action === 'started' && current) {
       setProgressWarning({ sessionId: session.id, message: '请先结束正在进行的环节，再记录下一场开始。' });
       return;
     }
     setProgressWarning(null);
-    const stamp = new Date().toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit', hour12: false });
-    update(previous => ({ ...previous, onsite: true, actual: {
-      ...previous.actual, [session.id]: { ...previous.actual[session.id], [action]: stamp },
-    } }));
+    const stamp = new Date().toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit', hourCycle: 'h23' });
+    setRecording(true);
+    try {
+      await registration.change('/actual', 'POST', { sessionId: session.id, action: action === 'started' ? 'start' : 'end',
+        time: stamp, revision: registration.current.revision, operations: rescueOperations(event) });
+    } catch (error) {
+      setProgressWarning({ sessionId: session.id, message: error.message });
+    } finally {
+      setRecording(false);
+    }
   }
-  function checkIn(e) {
+  async function checkIn(e) {
     e.preventDefault();
-    const form = new FormData(e.currentTarget);
+    const formElement = e.currentTarget;
+    const form = new FormData(formElement);
     const code = form.get('code').trim().toUpperCase();
-    const person = event.attendees.find(item => item.id === code);
-    if (!person || person.status !== '已确认') return setScanResult({ tone: 'error', text: '凭证无效或报名尚未确认。' });
-    if (scanSession && person.sessionId !== scanSession) return setScanResult({ tone: 'error', text: '该观众未报名此分场。' });
-    if (event.checkins.some(item => item.personId === person.id && item.sessionId === scanSession)) {
+    if (scanning || !registration.current) return;
+    const person = event.attendees.find(item => item.id.toUpperCase() === code);
+    if (person && event.checkins.some(item => item.personId === person.id && item.sessionId === scanSession)) {
       return setScanResult({ tone: 'warning', text: person.name + '已签到，人数保持不变。' });
     }
-    update(previous => ({ ...previous, checkins: [...previous.checkins, { personId: person.id, sessionId: scanSession }] }));
-    setScanResult({ tone: 'success', text: person.name + '签到成功' });
-    e.currentTarget.reset();
+    setScanning(true);
+    try {
+      const result = await registration.change('/checkins', 'POST', { code, sessionId: scanSession });
+      const text = result.duplicate ? '已签到，人数保持不变。' : '签到成功';
+      setScanResult({ tone: result.duplicate ? 'warning' : 'success', text: result.name + text });
+      formElement.reset();
+    } catch (error) {
+      setScanResult({ tone: 'error', text: error.message });
+    } finally {
+      setScanning(false);
+    }
   }
   const entranceCount = event.checkins.filter(item => !item.sessionId).length;
   const runbookRows = sessions.map(item => {
     const actual = event.actual[item.id];
     const progress = actual?.started ? actual.started + (actual.ended ? '–' + actual.ended : ' 开始') : '待开始';
     const location = roomLabel(item.room) + ' · 签到 / 引导';
-    const action = actual?.ended ? <Badge tone="success">已结束</Badge> : <button className="button small" onClick={() => mark(item, actual?.started ? 'ended' : 'started')}>
+    const action = actual?.ended ? <Badge tone="success">已结束</Badge> : <button className="button small" disabled={recording || !registration.current} onClick={() => mark(item, actual?.started ? 'ended' : 'started')}>
       {actual?.started ? '记录结束' : '记录开始'}</button>;
     if (mobile) return <li key={item.id} className="live-runbook-card">
       <div className="live-runbook-heading"><strong>{item.title}</strong><span className="tabular muted">{timeRange(item)}</span></div>
@@ -71,7 +90,7 @@ export function Live({ event, readOnly, mobile, update, openChange }) {
           options={[{ value: '', label: '活动入场' }, ...sessions.map(item => ({ value: item.id, label: checkinPoint(item) + ' · ' + item.title }))]} />
         <label>个人凭证<input name="code" autoCapitalize="characters" autoComplete="off" spellCheck={false}
           placeholder={event.isSample ? '演练凭证 G001' : '输入已确认观众的凭证'} required /></label>
-        <button className="button primary"><ScanLine size={17} />核验并签到</button>
+        <button className="button primary" disabled={scanning || !registration.current}><ScanLine size={17} />核验并签到</button>
         {scanResult && <Notice tone={scanResult.tone} announce>{scanResult.text}</Notice>}
       </form>}
     </Panel></div>
@@ -81,25 +100,27 @@ export function Live({ event, readOnly, mobile, update, openChange }) {
         <Table headers={['计划时间', '环节', '地点与岗位', '实绩', ...(readOnly ? [] : ['操作'])]}>{runbookRows}</Table>
       </>}
     </Panel>
-    {board && <Dialog title="现场大屏预览" close={() => setBoard(false)}>
-      <div className="board"><h3>{event.title}</h3><p>当前 · {current?.title ?? '待开始'}</p><p>下一场 · {next ? next.title + ' · ' + roomLabel(next.room) + ' · ' + next.start : '无'}</p>
-        {event.history[0] && <p>最新变更 · {event.history[0].title} · {roomLabel(event.history[0].after.room)} · {timeRange(event.history[0].after)}</p>}</div>
-    </Dialog>}
+    {board && <Dialog title="现场大屏预览" close={() => setBoard(false)}><LiveBoard event={event} current={current} next={next} /></Dialog>}
     {report && <Dialog title="上报现场问题" variant="drawer" close={() => setReport(false)}>
-      <form className="form-stack" onSubmit={e => {
-        e.preventDefault();
-        const fields = new FormData(e.currentTarget);
-        const change = incidentChange(event, fields.get('kind'), fields.get('session'));
-        if (change) openChange(change);
+      <RescueIncidentForm event={event} onPrepare={async input => {
+        await prepareRescue(input);
         setReport(false);
-      }}>
-        <Select label="问题类型" name="kind" options={Object.entries(incidentKinds).map(([value, label]) => ({ value, label }))} />
-        <Select label="受影响环节" name="session" defaultValue={event.change?.sessionId ?? sessions.at(-1)?.id}
-          options={sessions.map(item => ({ value: item.id, label: item.title }))} />
-        <button className="button primary"><ArrowRightLeft size={17} />生成调整方案</button>
-      </form>
+      }} />
     </Dialog>}
   </>;
+}
+
+function LiveBoard({ event, current, next }) {
+  const release = event.history[0];
+  return <div className="board"><h3>{event.title}</h3>
+    <p>当前 · {current?.title ?? '待开始'}{current && ' · ' + roomLabel(current.room)}</p>
+    <p>下一场 · {next ? next.title + ' · ' + roomLabel(next.room) + ' · ' + next.start : '无'}</p>
+    {release?.kind === 'rescue' ? <div>
+      <p>最新变更 · v{release.version}</p>
+      <ul className="plain-list">{release.changes.map(({ before, after }) =>
+        <li key={before.id}>{before.title} · {roomLabel(after.room)} · {timeRange(after)}</li>)}</ul>
+    </div> : release && <p>最新变更 · {release.title} · {roomLabel(release.after.room)} · {timeRange(release.after)}</p>}
+  </div>;
 }
 
 export function Review({ event, readOnly, copy, update, notify }) {

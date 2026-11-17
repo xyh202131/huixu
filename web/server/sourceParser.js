@@ -42,9 +42,10 @@ function plainSections(buffer) {
   return { sections, partial: clipped.length < text.length };
 }
 
-function pythonExtract(buffer, name) {
+function pythonExtract(buffer, name, mode) {
   return new Promise(resolve => {
-    const child = spawn(process.env.HUIXU_MEMORY_PYTHON || 'python', [parser, name, sourceAccept], {
+    const args = mode ? [parser, name, sourceAccept, mode] : [parser, name, sourceAccept];
+    const child = spawn(process.env.HUIXU_MEMORY_PYTHON || 'python', args, {
       windowsHide: true, stdio: ['pipe', 'pipe', 'ignore'],
     });
     let output = '';
@@ -71,6 +72,10 @@ function pythonExtract(buffer, name) {
     });
     child.stdin.end(buffer);
   });
+}
+
+export function parseSpreadsheet(name, buffer) {
+  return pythonExtract(buffer, name, '--registration');
 }
 
 export async function parseSource(name, buffer) {

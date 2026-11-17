@@ -8,16 +8,28 @@ export const planSections = {
   budgetItems: { label: '预算明细', fields: { name: '费用项目', amount: '金额（元）' }, required: ['amount'] },
 };
 
+export const topicPlanSections = {
+  event: { ...planSections.event, fields: { ...planSections.event.fields, goal: '活动目标', audience: '目标受众', registrationUrl: '公开报名链接' } },
+  agenda: { ...planSections.agenda, fields: { ...planSections.agenda.fields, duration: '建议时长（分钟）' } },
+  roster: planSections.roster,
+  roles: { label: '岗位分工', fields: { name: '岗位', duty: '职责', owner: '负责人' }, required: ['owner'] },
+  tasks: { label: '筹备任务', fields: { name: '任务', offset: '距活动开始的倒排天数', owner: '负责人' }, required: ['owner'] },
+  supplies: { label: '设备与物料', fields: { name: '物料', quantity: '数量' }, required: ['quantity'] },
+  venues: planSections.venues,
+  budgetItems: planSections.budgetItems,
+};
+
 export function missingPlanFields(plan, unresolved = []) {
   const missing = [];
   const pending = new Set(unresolved.map(fact => `${fact.section}:${fact.entityKey}:${fact.field}`));
-  for (const [section, { label, fields, required }] of Object.entries(planSections)) {
+  for (const [section, { label, fields, required }] of Object.entries(plan.topicPlan ? topicPlanSections : planSections)) {
     if (section === 'event') {
       for (const field of required) if (!plan.event[field] && !pending.has(`event::${field}`)) missing.push(fields[field]);
       continue;
     }
-    if (!plan[section].length) missing.push(label);
-    for (const row of plan[section]) {
+    const rows = plan[section] ?? [];
+    if (!rows.length) missing.push(label);
+    for (const row of rows) {
       for (const field of ['name', ...required]) {
         if (!row[field] && !pending.has(`${row.id}:${field}`)) missing.push(`${label} · ${row.name || '未命名'} · ${fields[field]}`);
       }

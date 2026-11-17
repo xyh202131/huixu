@@ -197,9 +197,9 @@ export function Toast({ feedback, dismiss }) {
   </>;
 }
 
-export function CheckControl({ checked, onChange, label, description, variant = 'check' }) {
+export function CheckControl({ checked, onChange, label, description, variant = 'check', disabled = false }) {
   return <label className={'check-control ' + variant}>
-    <input type="checkbox" checked={checked} onChange={event => onChange(event.target.checked)}
+    <input type="checkbox" checked={checked} disabled={disabled} onChange={event => onChange(event.target.checked)}
       role={variant === 'switch' ? 'switch' : undefined} aria-label={label} />
     <span className="check-mark" aria-hidden="true">{variant === 'check' && <svg viewBox="0 0 20 20"><path d="m5 10 3 3 7-7" /></svg>}</span>
     <span aria-hidden="true">{description}</span>

@@ -1,3 +1,5 @@
+import { reservesSeat } from './registrationRules.js';
+
 export const isClock = value => typeof value === 'string' && /^([01]\d|2[0-3]):[0-5]\d$/.test(value);
 
 export function minutes(time) {
@@ -60,7 +62,7 @@ function roomIssues(room, change, equipment, confirmedCount) {
   return issues;
 }
 
-export function checkCandidate(event, change, candidate, confirmedCount, personnel) {
+export function checkCandidate(event, change, candidate, confirmedCount, personnel, allowUnchanged = false) {
   const room = event.rooms.find(item => item.id === candidate.room);
   if (!room) return ['会场待确认'];
   const session = change.before;
@@ -69,11 +71,11 @@ export function checkCandidate(event, change, candidate, confirmedCount, personn
     return ['当前安排已更新，请从议程重新提出调整'];
   }
   if (!isClock(candidate.start) || !isClock(candidate.end) || candidate.start >= candidate.end) return ['结束时间须晚于开始时间'];
-  if (candidate.room === current.room && candidate.start === current.start && candidate.end === current.end) return ['新安排与当前安排相同'];
+  if (!allowUnchanged && sameCandidate(candidate, current)) return ['新安排与当前安排相同'];
 
   const confirmed = confirmedCount ?? (event.attendees ? event.attendees.filter(person =>
-    person.sessionId === session.id && person.status === '已确认').length : current.confirmed ?? 0);
-  const issues = roomIssues(room, change, current.equipment, confirmed);
+    person.sessionId === session.id && reservesSeat(person)).length : current.confirmed ?? 0);
+  const issues = roomIssues(room, change, current.equipment ?? [], confirmed);
   const duration = minutes(session.end) - minutes(session.start);
   if (minutes(candidate.end) - minutes(candidate.start) !== duration) issues.push('当天剩余时间不足，无法保留原环节时长');
   if (candidate.start < room.ready) issues.push('布置完成时间为 ' + room.ready);
@@ -116,7 +118,7 @@ export function checkCandidate(event, change, candidate, confirmedCount, personn
 export function analyzeMove(event, session, { room, start, closedRoom = '', earliest = '' }, confirmedCount) {
   const change = { before: session, closedRoom, earliest };
   const confirmed = confirmedCount ?? (event.attendees ? event.attendees.filter(person =>
-    person.sessionId === session.id && person.status === '已确认').length : session.confirmed ?? 0);
+    person.sessionId === session.id && reservesSeat(person)).length : session.confirmed ?? 0);
   const personnel = new Map(event.agenda.map(item => [item.id, sessionPeople(event, item)]));
   const assess = candidate => ({ candidate, issues: checkCandidate(event, change, candidate, confirmed, personnel) });
   const requested = assess(moveCandidate(session, room, start));
