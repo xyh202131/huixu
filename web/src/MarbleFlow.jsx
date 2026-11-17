@@ -1,6 +1,5 @@
 import { useEffect, useRef } from 'react';
 
-const textures = { ice: '/marble-ice.png', spectrum: '/marble-spectrum.png' };
 const frameInterval = 1000 / 30;
 const flowCycleSeconds = 18;
 
@@ -135,8 +134,11 @@ export function MarbleFlow({ variant = 'ice', strength = 1 }) {
     const canvas = canvasRef.current;
     const reducedMotion = matchMedia('(prefers-reduced-motion: reduce)');
     const image = new Image();
+    const base = '/marble-' + variant;
+    const webpBackground = CSS.supports('background-image', "image-set(url('/marble-ice.webp') type('image/webp'))");
     let visible = false;
     let unavailable = false;
+    let textureRequested = false;
     let renderer;
     let frame = 0;
     let lastDraw;
@@ -169,6 +171,10 @@ export function MarbleFlow({ variant = 'ice', strength = 1 }) {
       if (!visible || document.hidden || reducedMotion.matches || unavailable) {
         stop();
         return;
+      }
+      if (!textureRequested) {
+        textureRequested = true;
+        image.src = base + (webpBackground ? '.webp' : '.png');
       }
       if (!renderer && image.naturalWidth) {
         renderer = createRenderer(canvas, image, strength);
@@ -203,13 +209,17 @@ export function MarbleFlow({ variant = 'ice', strength = 1 }) {
     canvas.addEventListener('webglcontextlost', loseContext);
     canvas.addEventListener('webglcontextrestored', restoreContext);
     image.onload = sync;
-    image.src = textures[variant];
+    image.onerror = () => {
+      if (image.src.endsWith('.webp')) image.src = base + '.png';
+      else unavailable = true;
+    };
 
     return () => {
       stop();
       renderer?.dispose();
       canvas.removeAttribute('data-flowing');
       image.onload = null;
+      image.onerror = null;
       intersection.disconnect();
       dimensions.disconnect();
       reducedMotion.removeEventListener('change', sync);

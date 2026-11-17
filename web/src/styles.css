@@ -71,6 +71,10 @@ strong { font-weight: 650; }
 }
 .marble-flow-ice { --marble-image: url('/marble-ice.png'); }
 .marble-flow-spectrum { --marble-image: url('/marble-spectrum.png'); }
+@supports (background-image: image-set(url('/marble-ice.webp') type('image/webp'))) {
+  .marble-flow-ice { --marble-image: image-set(url('/marble-ice.webp') type('image/webp'), url('/marble-ice.png') type('image/png')); }
+  .marble-flow-spectrum { --marble-image: image-set(url('/marble-spectrum.webp') type('image/webp'), url('/marble-spectrum.png') type('image/png')); }
+}
 .marble-flow canvas { display: block; width: 100%; height: 100%; opacity: 0; }
 .marble-flow canvas[data-flowing] { opacity: 1; transition: opacity .36s ease; }
 @media (prefers-reduced-motion: reduce) {
@@ -118,6 +122,19 @@ button.metric:hover { border-color: var(--accent-border); background: var(--surf
 .panel-head { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 9px; margin-bottom: 15px; }
 .panel h2 { font-size: 22px; line-height: 1.35; letter-spacing: -.02em; font-weight: 750; }
 .table-scroll { max-width: 100%; overflow-x: auto; }
+.table-scroll[tabindex] { overscroll-behavior-inline: contain; }
+.table-scroll:focus-visible { outline-offset: -3px; border-radius: 7px; }
+.table-scroll-hint { margin: 6px 0 0; font-size: 12px; }
+.table-with-row-header table { border-collapse: separate; border-spacing: 0; }
+.table-with-row-header :is(thead th:first-child, tbody th[scope='row']) {
+  position: sticky; inset-inline-start: 0; z-index: 1;
+}
+.table-with-row-header thead th:first-child { background: var(--surface-muted); }
+.table-with-row-header tbody th[scope='row'] {
+  max-inline-size: 9rem; white-space: normal; overflow-wrap: anywhere;
+  background: var(--white); border-bottom: 1px solid var(--border); border-radius: 0;
+}
+.table-with-row-header tbody th small { font-weight: 400; }
 table { width: 100%; border-collapse: collapse; font-size: 14px; line-height: 1.45; text-align: left; }
 thead { background: var(--surface-muted); color: var(--muted); }
 th, td { padding: 10px 12px; }

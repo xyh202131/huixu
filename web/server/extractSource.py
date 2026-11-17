@@ -120,14 +120,66 @@ def rows_with_headers(rows):
         yield location, ' | '.join(fields)
 
 
+def spreadsheet_sheets(data, suffix):
+    if suffix in ('.csv', '.tsv'):
+        reader = csv.reader(io.StringIO(decode_text(data), newline=''), delimiter='\t' if suffix == '.tsv' else ',')
+        yield ((f'截至第 {reader.line_num} 行', row) for row in reader)
+    elif suffix == '.xls':
+        import xlrd
+
+        with xlrd.open_workbook(file_contents=data, on_demand=True) as workbook:
+            for sheet in workbook.sheets():
+                yield ((f'{sheet.name} · 第 {index + 1} 行', sheet.row_values(index)) for index in range(sheet.nrows))
+    elif suffix == '.xlsx':
+        from openpyxl import load_workbook
+
+        check_office_size(data)
+        workbook = load_workbook(io.BytesIO(data), read_only=True, data_only=True, keep_links=False)
+        try:
+            for sheet in workbook.worksheets:
+                rows = sheet.iter_rows(values_only=True)
+                yield ((f'{sheet.title} · 第 {index} 行', row) for index, row in enumerate(rows, 1))
+        finally:
+            workbook.close()
+
+
+def check_office_size(data):
+    with zipfile.ZipFile(io.BytesIO(data)) as archive:
+        entries = archive.infolist()
+        if len(entries) > 5000 or sum(entry.file_size for entry in entries) > 80 * 1024 * 1024:
+            raise ValueError('office archive too large')
+
+
+def registration_rows(data, suffix):
+    sheets = []
+    count = 0
+    for sheet in spreadsheet_sheets(data, suffix):
+        rows = []
+        for location, cells in sheet:
+            if len(cells) > 100:
+                raise ValueError('too many columns')
+            values = [str(value).strip() if value is not None else '' for value in cells]
+            if not any(values):
+                continue
+            if any(len(value) > 2000 for value in values):
+                raise ValueError('cell length exceeded')
+            count += 1
+            if count > 1100:
+                raise ValueError('too many rows')
+            rows.append({'location': location, 'cells': values})
+        if rows:
+            sheets.append(rows)
+    return sheets
+
+
 def extract(data, suffix, notes, deadline):
     if suffix in TEXT:
         yield from text_sections(decode_text(data))
         return
 
-    if suffix in ('.csv', '.tsv'):
-        reader = csv.reader(io.StringIO(decode_text(data), newline=''), delimiter='\t' if suffix == '.tsv' else ',')
-        yield from rows_with_headers((f'截至第 {reader.line_num} 行', row) for row in reader)
+    if suffix in ('.csv', '.tsv', '.xls', '.xlsx'):
+        for sheet in spreadsheet_sheets(data, suffix):
+            yield from rows_with_headers(sheet)
         return
 
     if suffix in ('.html', '.htm'):
@@ -193,31 +245,9 @@ def extract(data, suffix, notes, deadline):
                     notes.add('部分扫描页暂未完成 OCR')
         return
 
-    if suffix == '.xls':
-        import xlrd
-
-        with xlrd.open_workbook(file_contents=data, on_demand=True) as workbook:
-            for sheet in workbook.sheets():
-                yield from rows_with_headers((f'{sheet.name} · 第 {index + 1} 行', sheet.row_values(index)) for index in range(sheet.nrows))
-        return
-
     # Office 文件只在内存中解析，先限制解压体积。
-    with zipfile.ZipFile(io.BytesIO(data)) as archive:
-        entries = archive.infolist()
-        if len(entries) > 5000 or sum(entry.file_size for entry in entries) > 80 * 1024 * 1024:
-            raise ValueError('office archive too large')
-
-    if suffix == '.xlsx':
-        from openpyxl import load_workbook
-
-        workbook = load_workbook(io.BytesIO(data), read_only=True, data_only=True, keep_links=False)
-        try:
-            for sheet in workbook.worksheets:
-                rows = sheet.iter_rows(values_only=True)
-                yield from rows_with_headers((f'{sheet.title} · 第 {index} 行', row) for index, row in enumerate(rows, 1))
-        finally:
-            workbook.close()
-    elif suffix == '.docx':
+    check_office_size(data)
+    if suffix == '.docx':
         from docx import Document
 
         document = Document(io.BytesIO(data))
@@ -314,7 +344,14 @@ def main():
     name = sys.argv[1]
     suffix = extension(name)
     data = sys.stdin.buffer.read()
-    if suffix in ARCHIVES:
+    if len(sys.argv) > 3 and sys.argv[3] == '--registration':
+        try:
+            payload = {'sheets': registration_rows(data, suffix)}
+        except ImportError:
+            payload = {'error': '缺少 Excel 解析依赖，可先另存为 CSV 再导入。'}
+        except (ValueError, OSError, zipfile.BadZipFile, RuntimeError):
+            payload = {'error': '无法读取名单，文件可能已加密、损坏或超过名单大小限制。'}
+    elif suffix in ARCHIVES:
         payload = archive(data, name, set(sys.argv[2].split(',')))
     else:
         sections, state, note = document(data, suffix, 450_000, 2500, time.monotonic() + 38)

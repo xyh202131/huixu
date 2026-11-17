@@ -1,10 +1,11 @@
 import { sessionPeople } from './scheduling';
+import { reservesSeat } from './registrationRules';
 
 export async function askModel(question, event, signal) {
   const registrations = new Map();
   for (const person of event.attendees) {
     const totals = registrations.get(person.sessionId) ?? { confirmed: 0, waitlisted: 0, pending: 0 };
-    if (person.status === '已确认') totals.confirmed += 1;
+    if (reservesSeat(person)) totals.confirmed += 1;
     if (person.status === '候补') totals.waitlisted += 1;
     if (person.status === '待审核') totals.pending += 1;
     registrations.set(person.sessionId, totals);
@@ -29,7 +30,7 @@ export async function askModel(question, event, signal) {
       pendingTasks: event.tasks.filter(task => !task.done).slice(0, 24).map(task => task.name),
       budget: event.budget, actualCost: event.quotes.reduce((total, quote) => total + quote.actual, 0),
       capacity: event.capacity, formOpen: event.formOpen, registered: event.attendees.length,
-      confirmed: event.attendees.filter(person => person.status === '已确认').length,
+      confirmed: event.attendees.filter(reservesSeat).length,
       waitlisted: event.attendees.filter(person => person.status === '候补').length,
       checkedIn: event.checkins.filter(item => !item.sessionId).length,
       pendingChange: event.change?.title, lastPublished: event.history[0]?.title,

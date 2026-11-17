@@ -3,6 +3,8 @@ import { ArrowRight, ArrowRightLeft, CalendarDays, FileText, MapPin, Monitor, Us
 import { Badge, Empty, IconTile, LinkButton, PageHead, Panel, Table, Tabs } from './components';
 import { Dialog, Notice } from './interactions';
 import { Select } from './Select';
+import { ActiveRescue, ReleasedRescue } from './RescueChange';
+import { rescueOperations } from './registrationRules';
 import { ProjectMemory } from './ProjectMemory';
 import { ImportReview, OrganizedPlan } from './ImportReview';
 import { checkCandidate, makeChange, money, moveCandidate, participantCount, roomLabel, timeRange } from './model';
@@ -60,7 +62,7 @@ export function Schedule({ event, readOnly, openChange, update, notify, navigate
   const [editing, setEditing] = useState(null);
   const [problem, setProblem] = useState('');
   const [dragRoom, setDragRoom] = useState('');
-  const agenda = [...event.agenda].sort((a, b) => a.start.localeCompare(b.start));
+  const agenda = event.agenda.toSorted((a, b) => a.start.localeCompare(b.start));
   const sessions = agenda.filter(item => room === '全部' || roomLabel(item.room) === room);
   function createProposal(item, target, start) {
     if (target === item.room && start === item.start) {
@@ -75,12 +77,15 @@ export function Schedule({ event, readOnly, openChange, update, notify, navigate
     setProblem('');
   }
   return <>
-    <PageHead heading="h2" title="方案与议程" description={readOnly ? '查看各会场的容量、设备和议程安排。' : '查看各会场的安排，编辑时间或拖动环节，发布前统一校验。'}>
+    <PageHead heading="h2" title="方案与议程" description={event.organizedPlan?.topicPlan && !agenda.length
+      ? '编辑活动目标、环节和筹备事项，补齐方案里待确认的信息。'
+      : readOnly ? '查看各会场的容量、设备和议程安排。' : '查看各会场的安排，编辑时间或拖动环节，发布前统一校验。'}>
       <Badge tone={event.version ? 'success' : 'neutral'}>{event.version ? '发布版本 v' + event.version : '计划草稿'}</Badge>
     </PageHead>
     {event.organizedPlan && <div className="activity-anchor" id="activity-organized-plan">
-      <OrganizedPlan key={event.organizedPlan.id} plan={event.organizedPlan} update={update} notify={notify} />
+      <OrganizedPlan key={event.organizedPlan.id} plan={event.organizedPlan} update={update} notify={notify} navigate={navigate} />
     </div>}
+    {event.organizedPlan?.topicPlan && !agenda.length ? <Notice>当前为方案草稿。具体时间和会场留待确认后排程。</Notice> : <>
     <Panel title="会场安排">
       <div className="room-grid">{event.rooms.map(item => {
         const label = roomLabel(item.id);
@@ -108,7 +113,7 @@ export function Schedule({ event, readOnly, openChange, update, notify, navigate
       <Table headers={['时间', '环节', '会场', '嘉宾', '确认报名', ...(readOnly ? [] : ['操作'])]}>
         {sessions.map(item => {
           const confirmedTime = event.issues.find(issue => issue.sessionId === item.id)?.resolved;
-          const released = event.history.find(change => change.before.id === item.id);
+          const released = event.history.find(change => change.before?.id === item.id || change.changes?.some(row => row.before.id === item.id));
           return <tr key={item.id} draggable={!readOnly} onDragStart={e => { e.dataTransfer.setData('text/plain', item.id); e.dataTransfer.effectAllowed = 'move'; }} onDragEnd={() => setDragRoom('')}>
             <td className="tabular">{timeRange(item)}</td><td><strong>{item.title}</strong>
               {released && <div><LinkButton onClick={() => navigate(`change/released/${released.id}`)}>变更 v{released.version}</LinkButton></div>}
@@ -120,6 +125,7 @@ export function Schedule({ event, readOnly, openChange, update, notify, navigate
       </Table>
       {!sessions.length && <Empty>该会场暂无议程。</Empty>}
     </Panel>
+    </>}
     {editing && <Dialog key={editing.id} title={'调整' + editing.title} variant="drawer" close={closeEditor}>
       <form className="form-stack" onSubmit={e => {
         e.preventDefault();
@@ -158,7 +164,7 @@ function ImpactTable({ before, after, impact }) {
 }
 
 function AffectedPeople({ impact }) {
-  const groups = ['已确认', '候补', '待审核'].map(status => ({ status, people: impact.registrations.filter(person => person.status === status) }));
+  const groups = ['已确认', '候补', '待审核', '已取消'].map(status => ({ status, people: impact.registrations.filter(person => person.status === status) }));
   return <>
     <Panel title="受影响报名">
       <div className="actions compact">{groups.map(({ status, people }) => <Badge key={status}>{status} {people.length} 人</Badge>)}</div>
@@ -166,7 +172,7 @@ function AffectedPeople({ impact }) {
       {impact.registrations.length > 0 && <details className="activity-file-history">
         <summary>查看受影响名单（{impact.registrations.length} 人）</summary>
         {groups.filter(group => group.people.length).map(({ status, people }) => <div className="impact-registration-group" key={status}>
-          <strong>{status} · {people.length} 人</strong><p>{people.map(person => person.name).join('、')}</p>
+          <strong>{status} · {people.length} 人</strong><p>{people.map(person => person.name + (person.attendance === '无法参加' ? '（无法参加）' : '')).join('、')}</p>
         </div>)}
       </details>}
     </Panel>
@@ -203,6 +209,7 @@ function ActiveChange({ event, readOnly, publish, refreshMoveChange }) {
     ?? choices.find(item => item.issues.length === 0) ?? choices[0];
   const [confirmation, setConfirmation] = useState(null);
   const [publishProblem, setPublishProblem] = useState('');
+  const [publishing, setPublishing] = useState(false);
   const count = participantCount(event, change.sessionId);
   const impact = choice && describeChangeImpact(event, change, choice.candidate);
   const audienceCount = impact?.notice.recipients.length ?? 0;
@@ -259,10 +266,18 @@ function ActiveChange({ event, readOnly, publish, refreshMoveChange }) {
       <button className="button primary" aria-haspopup="dialog" disabled={!choice || choice.issues.length > 0 || !(audienceCount + personnelCount)} onClick={() => openPublish('notify')}>发布并记录演练通知</button>
     </div>}
     {confirmation && choice && <Dialog title="确认发布变更" close={() => setConfirmation(null)} footer={<>
-      <button className="button" type="button" onClick={() => setConfirmation(null)}>返回核对</button>
-      <button className="button primary" type="button" disabled={Boolean(stale) || choice.issues.length > 0} onClick={() => {
-        if (!publish(choice.candidate, recordsNotice, confirmation.reviewed)) setPublishProblem('校验未通过，请返回核对候选方案。');
-      }}>{publishLabel}</button>
+      <button className="button" type="button" disabled={publishing} onClick={() => setConfirmation(null)}>返回核对</button>
+      <button className="button primary" type="button" disabled={publishing || Boolean(stale) || choice.issues.length > 0} onClick={async () => {
+        setPublishing(true);
+        setPublishProblem('');
+        try {
+          if (!await publish(choice.candidate, recordsNotice, confirmation.reviewed)) setPublishProblem('校验未通过，请返回核对候选方案。');
+        } catch (error) {
+          setPublishProblem(error.message);
+        } finally {
+          setPublishing(false);
+        }
+      }}>{publishing ? '正在发布…' : publishLabel}</button>
     </>}>
       <p><strong>{change.title}</strong> · {timeRange(choice.candidate)} · {roomLabel(choice.candidate.room)}</p>
       <Notice tone={choice.issues.length ? 'warning' : 'info'}>{choice.issues.length ? choice.issues.join(' · ') : '公开议程、签到点、岗位清单、执行台本和现场大屏将同步更新。'}</Notice>
@@ -274,13 +289,20 @@ function ActiveChange({ event, readOnly, publish, refreshMoveChange }) {
   </>;
 }
 
-export function ChangePage({ event, readOnly, publish, refreshMoveChange, navigate, activateChange, releasedChangeId }) {
+export function ChangePage({ event, readOnly, publish, refreshMoveChange, navigate, activateChange, releasedChangeId, prepareRescue, releaseRescue, registration }) {
   const selectedRelease = event.history.find(change => change.id === releasedChangeId);
   const latest = selectedRelease ?? event.history[0];
   const showDraft = event.change && !selectedRelease;
+  const rescueDraft = showDraft && event.change.kind === 'rescue';
+  const rescueRelease = !showDraft && latest?.kind === 'rescue';
+  const stale = rescueDraft && (registration.current?.revision !== event.change.revision ||
+    event.change.operationsKey !== JSON.stringify(rescueOperations(event)));
   return <>
     <PageHead heading="h3" title="变更单" description={readOnly ? '比较候选方案，查看发布影响和通知预览。' : '核对影响、比较方案，再统一发布。'} />
-    {showDraft ? <ActiveChange key={event.change.id} event={event} readOnly={readOnly} publish={publish} refreshMoveChange={refreshMoveChange} /> : <Panel title={selectedRelease ? '发布记录' : latest ? '最近发布' : '待发布变更'}>
+    {rescueDraft ? <ActiveRescue key={JSON.stringify([event.change.id, event.change.revision, event.change.analysis.incident])}
+      event={event} change={event.change} readOnly={readOnly} stale={stale} prepareRescue={prepareRescue} releaseRescue={releaseRescue} />
+      : rescueRelease ? <ReleasedRescue release={latest} navigate={navigate} />
+      : showDraft ? <ActiveChange key={event.change.id} event={event} readOnly={readOnly} publish={publish} refreshMoveChange={refreshMoveChange} /> : <Panel title={selectedRelease ? '发布记录' : latest ? '最近发布' : '待发布变更'}>
       {latest ? <>
         <Notice tone="success">{latest.title}已发布 · v{latest.version} · {latest.notified ? '已记录演练通知' : '仅发布安排'}</Notice>
         <ImpactTable before={latest.before} after={latest.after} impact={latest.impact} />
@@ -290,6 +312,7 @@ export function ChangePage({ event, readOnly, publish, refreshMoveChange, naviga
         </div>
       </> : <Empty>{readOnly ? '暂无待发布的调整。' : '当前没有待发布的调整，可从议程或现场创建。'}</Empty>}
     </Panel>}
+    {rescueRelease && selectedRelease && event.change && <LinkButton onClick={() => navigate('change')}>返回待发布变更单</LinkButton>}
     {!showDraft && latest?.impact && <AffectedPeople impact={latest.impact} />}
     {!showDraft && latest?.notified && latest.impact && <ChangeNotices impact={latest.impact} />}
     {!selectedRelease && !readOnly && event.draftChanges?.length > 0 && <Panel title="其他待评估变更">

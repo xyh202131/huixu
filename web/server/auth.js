@@ -171,12 +171,14 @@ export function createWorkbenchAuth(root, databaseOverride) {
     return async (request, response) => {
       if (!isLocalRequest(request)) return sendJson(response, 403, { error: '此接口仅供本机工作台访问。' });
       if (!request.headers.cookie) return sendJson(response, 401, { error: '请先登录会序。' });
+      let user;
       try {
-        if (!await currentUser(request, await getAuth())) return sendJson(response, 401, { error: '登录已失效，请重新登录。' });
+        user = await currentUser(request, await getAuth());
+        if (!user) return sendJson(response, 401, { error: '登录已失效，请重新登录。' });
       } catch {
         return sendJson(response, 503, { error: '暂时无法验证登录状态。' });
       }
-      return handler(request, response);
+      return handler(request, response, user);
     };
   }
 

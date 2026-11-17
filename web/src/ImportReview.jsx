@@ -1,10 +1,11 @@
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useId, useRef, useState } from 'react';
 import { ArrowRight, Check, FileText, Sparkles } from 'lucide-react';
 import { Badge, Empty, Panel, Tabs } from './components';
 import { Notice, Popconfirm } from './interactions';
 import { organizationRequest } from './memoryClient';
 import { uid } from './model';
-import { conflictEvidenceKey, missingPlanFields, planFromReview, planSections, reviewChoices } from './organizationSchema';
+import { conflictEvidenceKey, missingPlanFields, planFromReview, planSections, reviewChoices, topicPlanSections } from './organizationSchema';
+import { topicEventDetails } from './topicPlan';
 
 function factLabel(fact) {
   const field = planSections[fact.section].fields[fact.field];
@@ -170,37 +171,57 @@ export function ImportReview({ event, update, notify, navigate, organize, organi
   </Panel>;
 }
 
-function PlanFields({ section, data, change }) {
-  return <div className="import-plan-fields">{Object.entries(planSections[section].fields).map(([field, label]) =>
-    <label key={field} className={field === 'title' ? 'plan-title-field' : undefined}>{label}
-      <input value={data[field] ?? ''} onChange={e => change(field, e.target.value)} />
-    </label>)}</div>;
+function PlanFields({ fields, data, change, topic }) {
+  const id = useId();
+  return <div className="import-plan-fields">{Object.entries(fields).map(([field, label]) => {
+    const labelId = id + '-' + field;
+    const input = { value: data[field] ?? '', onChange: e => change(field, e.target.value), 'aria-labelledby': labelId };
+    return <label key={field} className={['title', 'goal', 'registrationUrl'].includes(field) ? 'plan-title-field' : undefined}><span id={labelId}>{label}</span>
+      {field === 'goal' ? <textarea rows={2} {...input} /> : <input {...input}
+        type={topic && field === 'date' ? 'date' : 'text'} required={topic && field === 'title'} />}
+    </label>;
+  })}</div>;
 }
 
-export function OrganizedPlan({ plan, update, notify }) {
+export function OrganizedPlan({ plan, update, notify, navigate }) {
   const [edited, setEdited] = useState(null);
   const draft = edited ?? plan;
   const missing = missingPlanFields(draft);
   const dirty = edited !== null;
+  const topic = draft.topicPlan;
+  const sections = topic ? topicPlanSections : planSections;
 
   function edit(change) {
     setEdited(current => change(current ?? plan));
   }
 
-  return <Panel title="导入生成的活动方案" action={<Badge tone={dirty ? 'amber' : 'neutral'}>{dirty ? '有未保存的修改' : '可编辑草稿'}</Badge>}>
+  return <Panel title={topic ? '主题生成的活动方案' : '导入生成的活动方案'}
+    action={<Badge tone={dirty ? 'amber' : 'neutral'}>{dirty ? '有未保存的修改' : '可编辑草稿'}</Badge>}>
+    {topic && <div className="topic-plan-context">
+      <p className="muted">{draft.model ? '由已配置的模型起草。' : '由会序的活动模板起草。'}环节时长为建议，具体时间、场地和负责人由团队确认。</p>
+      {draft.reference && <p className="muted">参考《{draft.reference.title}》{draft.reference.version ? ' v' + draft.reference.version : '草稿'}，
+        借用 {draft.reference.durations} 个环节时长、{draft.reference.tasks} 项筹备任务
+        {draft.reference.roles > 0 && '、' + draft.reference.roles + ' 个岗位'}{draft.reference.supplies > 0 && '、' + draft.reference.supplies + ' 项物料'}。</p>}
+    </div>}
     <form className="form-stack" onSubmit={event => {
       event.preventDefault();
-      update(current => current.organizedPlan?.id === draft.id ? { ...current, organizedPlan: draft } : current);
+      if (topic && !draft.event.title.trim()) {
+        notify('请填写活动名称');
+        return;
+      }
+      update(current => current.organizedPlan?.id === draft.id ? {
+        ...current, ...(topic && !current.version ? topicEventDetails(draft.event) : {}), organizedPlan: draft,
+      } : current);
       setEdited(null);
       notify('已保存活动方案草稿');
     }}>
-      <PlanFields section="event" data={draft.event} change={(field, value) => edit(current => ({ ...current, event: { ...current.event, [field]: value } }))} />
-      {Object.entries(planSections).filter(([section]) => section !== 'event').map(([section, { label }]) =>
+      <PlanFields fields={sections.event.fields} topic={topic} data={draft.event} change={(field, value) => edit(current => ({ ...current, event: { ...current.event, [field]: value } }))} />
+      {Object.entries(sections).filter(([section]) => section !== 'event').map(([section, { label, fields }]) =>
         <details key={section} className="import-review-detail">
           <summary>{label}（{draft[section].length}）</summary>
           {draft[section].map((row, index) => <fieldset className="import-plan-row" key={row.id}>
             <legend>{row.name || label + ' ' + (index + 1)}</legend>
-            <PlanFields section={section} data={row} change={(field, value) => edit(current => ({
+            <PlanFields fields={fields} topic={topic} data={row} change={(field, value) => edit(current => ({
               ...current, [section]: current[section].map(item => item.id === row.id ? { ...item, [field]: value } : item),
             }))} />
             <button type="button" className="button small" onClick={() => edit(current => ({
@@ -213,7 +234,9 @@ export function OrganizedPlan({ plan, update, notify }) {
           }}>添加{label}</button>
         </details>)}
       <div className="import-review-footer plan-editor-actions">
-        {missing.length > 0 && <span className="muted">{missing.length} 项待补</span>}
+        {missing.length > 0 && (topic ? <details className="plan-missing"><summary>{missing.length} 项待补</summary>
+          <ul>{missing.map((item, index) => <li key={index}>{item}</li>)}</ul></details> : <span className="muted">{missing.length} 项待补</span>)}
+        {topic && <button type="button" className="button" disabled={dirty} onClick={() => navigate('materials/design')}>生成设计提示词</button>}
         <button className="button primary">保存活动方案</button>
       </div>
     </form>
