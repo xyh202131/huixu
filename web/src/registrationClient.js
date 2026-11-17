@@ -2,6 +2,8 @@ import { useEffect, useState } from 'react';
 import { sessionExpired } from './authClient';
 import { signupSnapshot } from './registrationRules.js';
 
+const ownerBase = '/api/registration/events';
+
 async function registrationRequest(base, path, method = 'GET', input, signal, token) {
   const headers = {};
   if (token) headers['X-Huixu-Confirmation'] = token;
@@ -11,7 +13,7 @@ async function registrationRequest(base, path, method = 'GET', input, signal, to
     body = JSON.stringify(input);
   }
   const response = await fetch(base + path, { method, headers, body, signal, cache: 'no-store' });
-  if (response.status === 401 && base === '/api/registration') window.dispatchEvent(new Event(sessionExpired));
+  if (response.status === 401 && base === ownerBase) window.dispatchEvent(new Event(sessionExpired));
   if (!response.headers.get('content-type')?.includes('application/json')) throw new Error('报名服务暂时不可用。');
   const result = await response.json();
   if (!response.ok) {
@@ -23,7 +25,7 @@ async function registrationRequest(base, path, method = 'GET', input, signal, to
 }
 
 export function ownerRegistration(path, method, body, signal) {
-  return registrationRequest('/api/registration/events', path, method, body, signal);
+  return registrationRequest(ownerBase, path, method, body, signal);
 }
 
 export function publicRegistration(path, method, body, signal) {
@@ -55,14 +57,30 @@ export function pollRegistration(load, interval) {
   };
 }
 
+function unsharedCheckins(legacy, saved) {
+  if (!legacy.length) return [];
+  const key = ({ personId, sessionId }) => JSON.stringify([personId.toUpperCase(), sessionId]);
+  const known = new Set(saved.map(key));
+  return legacy.filter(record => {
+    if (typeof record?.personId !== 'string' || typeof record.sessionId !== 'string') return false;
+    const id = key(record);
+    if (known.has(id)) return false;
+    known.add(id);
+    return true;
+  });
+}
+
 export function useRegistrationWorkspace(enabled, event) {
   const [data, setData] = useState({});
   const [mailByEvent, setMailByEvent] = useState({});
   const [problem, setProblem] = useState('');
+  const [migrationProblem, setMigrationProblem] = useState('');
   const [reload, setReload] = useState(0);
   const eventId = event.id;
   const base = '/' + eventId;
   const current = data[eventId] ?? null;
+  const legacyKey = JSON.stringify(event.checkins ?? []);
+  const pendingCheckins = enabled && current ? unsharedCheckins(event.checkins ?? [], current.checkins).length : 0;
 
   function accept(result) {
     setData(existing => {
@@ -75,7 +93,9 @@ export function useRegistrationWorkspace(enabled, event) {
   useEffect(() => {
     if (!enabled) return;
     const controller = new AbortController();
+    const legacy = JSON.parse(legacyKey);
     let holding = false;
+    let migratedRevision;
     async function load() {
       if (holding || controller.signal.aborted) return;
       holding = true;
@@ -87,6 +107,19 @@ export function useRegistrationWorkspace(enabled, event) {
           if (error.status !== 404) throw error;
           result = await ownerRegistration('', 'POST', signupSnapshot(event), controller.signal);
         }
+        const remaining = unsharedCheckins(legacy, result.checkins);
+        if (remaining.length && migratedRevision !== result.revision && !controller.signal.aborted) {
+          try {
+            for (let offset = 0; offset < remaining.length && !controller.signal.aborted; offset += 1000) {
+              result = await ownerRegistration(base + '/checkins/migrate', 'POST',
+                { records: remaining.slice(offset, offset + 1000) }, controller.signal);
+            }
+            migratedRevision = result.revision;
+            if (!controller.signal.aborted) setMigrationProblem('');
+          } catch (error) {
+            if (!controller.signal.aborted) setMigrationProblem(error.message);
+          }
+        }
         if (!controller.signal.aborted) { accept(result); setProblem(''); }
       } catch (error) {
         if (!controller.signal.aborted) setProblem(error.message);
@@ -95,12 +128,13 @@ export function useRegistrationWorkspace(enabled, event) {
       }
     }
     setProblem('');
+    setMigrationProblem('');
     const stopPolling = pollRegistration(load, 3500);
     return () => {
       controller.abort();
       stopPolling();
     };
-  }, [enabled, eventId, reload]);
+  }, [enabled, eventId, legacyKey, reload]);
 
   async function change(path, method, body) {
     try {
@@ -118,6 +152,6 @@ export function useRegistrationWorkspace(enabled, event) {
     }
   }
 
-  return { current, problem, refresh: () => setReload(value => value + 1), change,
+  return { current, problem, migrationProblem, pendingCheckins, refresh: () => setReload(value => value + 1), change,
     mail: mailByEvent[eventId], legacyPeople: event.attendees ?? [] };
 }

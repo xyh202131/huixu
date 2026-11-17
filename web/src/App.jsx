@@ -153,10 +153,9 @@ function Workbench({ route, auth, useStoredEvents }) {
   const localEvent = events.find(item => item.id === (externalRoute || publicRoute ? routeEventId : activeId)) ?? events[0];
   const registration = useRegistrationWorkspace(Boolean(account), localEvent);
   const shared = registration.current;
-  let event = localEvent;
+  let event = account ? { ...localEvent, checkins: shared?.checkins ?? [] } : localEvent;
   if (shared) {
-    const checkins = new Map([...localEvent.checkins, ...shared.checkins].map(entry => [JSON.stringify([entry.personId, entry.sessionId]), entry]));
-    event = { ...localEvent, attendees: shared.people, formOpen: shared.event.formOpen, checkins: [...checkins.values()] };
+    event = { ...event, attendees: shared.people, formOpen: shared.event.formOpen };
     if (shared.operations) {
       const actual = { ...localEvent.actual, ...shared.operations.actual };
       const replies = new Map([...shared.operations.replies, ...localEvent.replies].map(reply => [reply.id, reply]));
@@ -314,13 +313,12 @@ function Workbench({ route, auth, useStoredEvents }) {
     if (!account || !shared) throw new Error('活动服务正在读取议程，请稍后重试。');
     const operations = rescueOperations(event);
     const result = await registration.change('/rescue/preview', 'POST', {
-      revision: shared.revision, incident, operations,
+      revision: shared.revision, incident, operations, preferredMoves: preferred?.moves,
     });
-    const { analysis, state } = result;
-    const preferredIndex = preferred ? analysis.plans.findIndex(plan => JSON.stringify(plan.moves) === JSON.stringify(preferred.moves)) : -1;
+    const { analysis, state, preferredIndex, invalidatedSelection } = result;
     const change = { id: previous?.id ?? uid(), kind: 'rescue', title: rescueTitle(analysis.incident),
       reason: rescueSummary(analysis), analysis, revision: state.revision, version: state.event.version,
-      operationsKey: JSON.stringify(operations), preferredIndex: Math.max(0, preferredIndex) };
+      operationsKey: JSON.stringify(operations), preferredIndex, invalidatedSelection };
     if (previous) update(current => current.change?.id === previous.id ? { ...current, change } : current);
     else openChange(change);
     setAgentRun({ eventId: event.id, question: change.title, answer: change.reason,
@@ -337,13 +335,11 @@ function Workbench({ route, auth, useStoredEvents }) {
     navigate('change/released/' + change.id);
   }
   function refreshMoveChange() {
-    update(current => {
-      const change = current.change;
-      const session = current.agenda.find(item => item.id === change?.sessionId);
-      if (!session || !change.moveRequest) return current;
-      const refreshed = makeMoveChange(current, session, change.moveRequest, change.reason);
-      return { ...current, change: { ...refreshed, id: change.id } };
-    });
+    const change = event.change;
+    const session = event.agenda.find(item => item.id === change?.sessionId);
+    if (!session || !change.moveRequest) return;
+    const refreshed = makeMoveChange(event, session, change.moveRequest, change.reason);
+    update(current => current.change?.id === change.id ? { ...current, change: { ...refreshed, id: change.id } } : current);
   }
   async function organize(eventId, run = true) {
     const token = (organizationRequests.current[eventId] ?? 0) + 1;

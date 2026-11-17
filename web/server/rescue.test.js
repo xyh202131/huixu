@@ -131,6 +131,44 @@ test('救场只产生一个发布版本，发布阻止过期预览并保持报�
   assert.match(materialText({ ...result.event, ...result.operations }, '岗位清单'), /C 厅.*\n签到 · 待分配\n分场引导 · 演练引导员/);
 });
 
+test('重新校验保留有效的原选组合，失效时列出原方案和嘉宾冲突', async t => {
+  const directory = await mkdtemp(join(tmpdir(), 'huixu-rescue-selection-'));
+  const file = join(directory, 'rescue.sqlite');
+  const store = createRegistrationStore(process.cwd(), file);
+  t.after(async () => {
+    store.close();
+    for (const path of [file, file + '-shm', file + '-wal']) {
+      await unlink(path).catch(error => { if (error.code !== 'ENOENT') throw error; });
+    }
+    await rmdir(directory);
+  });
+  const event = sampleForum();
+  const owner = 'rescue-owner';
+  store.open(owner, signupSnapshot(event));
+  const preview = preferredMoves => store.rescuePreview(owner, event.id, {
+    revision: store.get(owner, event.id).revision, incident: closure, operations: rescueOperations(event), preferredMoves,
+  });
+  const original = preview();
+  const moves = original.analysis.plans[0].moves;
+  const later = [
+    { sessionId: 'session-3', room: 'B', start: '13:55', end: '14:40' },
+    { sessionId: 'session-4', room: 'C', start: '15:50', end: '16:30' },
+  ];
+  assert.ok(original.analysis.plans.every(plan => plan.moves[1].start !== later[1].start));
+  const retained = preview(later);
+  assert.equal(retained.invalidatedSelection, null);
+  assert.deepEqual(retained.analysis.plans[retained.preferredIndex].moves, later);
+  assert.ok(retained.analysis.plans[retained.preferredIndex].proof);
+
+  event.replies.at(-1).availability.start = '15:00';
+  const invalid = preview(moves);
+  assert.equal(invalid.preferredIndex, -1);
+  assert.deepEqual(invalid.invalidatedSelection.moves, moves);
+  assert.ok(invalid.invalidatedSelection.issues.some(issue => issue.includes('嘉宾可用时段为 15:00–17:30')));
+  assert.ok(invalid.analysis.plans.length > 0);
+  assert.ok(invalid.analysis.plans.every(plan => plan.moves[1].start >= '15:00'));
+});
+
 test('Agent 调用整场救场工具并返回经过联合校验的方案', async t => {
   let called = false;
   const model = createServer(async (request, response) => {

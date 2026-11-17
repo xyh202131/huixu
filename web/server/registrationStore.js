@@ -6,7 +6,7 @@ import { initialEvents, activityTypes } from '../src/model.js';
 import { describeRescueImpact } from '../src/changeImpact.js';
 import { reviewStatuses, reservesSeat } from '../src/registrationRules.js';
 import { analyzeRescue, rescueTitle, validateRescuePlan } from '../src/rescueScheduling.js';
-import { isClock } from '../src/scheduling.js';
+import { isClock, sameCandidate } from '../src/scheduling.js';
 import { localDatabasePath } from './localData.js';
 
 export class RegistrationError extends Error {
@@ -316,6 +316,27 @@ export function createRegistrationStore(root, override, now = Date.now) {
     });
   }
 
+  function migrateCheckins(owner, eventId, records) {
+    if (!Array.isArray(records) || records.length > 1000) {
+      throw new RegistrationError(400, '每批最多迁移 1000 条历史签到。');
+    }
+    return transaction(() => {
+      const row = findEvent(eventId, owner);
+      const people = new Map(peopleFor(eventId).map(person => [person.id.toUpperCase(), person.id]));
+      const insert = db.prepare('INSERT OR IGNORE INTO signup_checkins VALUES (?, ?, ?)');
+      let imported = 0;
+      for (const record of records) {
+        if (!validId(record?.personId) || (record.sessionId !== '' && !validId(record.sessionId))) continue;
+        const personId = people.get(record.personId.toUpperCase());
+        if (!personId) continue;
+        // 历史签到保留原签到点，之后的出席状态或换场不会改变已发生的记录。
+        imported += insert.run(eventId, personId, record.sessionId).changes;
+      }
+      if (imported) bump(eventId);
+      return state(imported ? findEvent(eventId, owner) : row);
+    });
+  }
+
   function publicSignup(publicId, input) {
     return transaction(() => {
       const publicDetails = publicEvent(publicId);
@@ -457,11 +478,32 @@ export function createRegistrationStore(root, override, now = Date.now) {
     const analysis = analyzeRescue(event, input.incident);
     if (analysis.error) throw new RegistrationError(400, analysis.error);
     const { incident } = analysis;
+    let preferredIndex = 0;
+    let invalidatedSelection = null;
+    if (input.preferredMoves !== undefined) {
+      if (!Array.isArray(input.preferredMoves) || input.preferredMoves.length > 500 ||
+          input.preferredMoves.some(move => !validId(move?.sessionId) || !validId(move.room) || !isClock(move.start) || !isClock(move.end))) {
+        throw new RegistrationError(400, '所选救场方案格式无效。');
+      }
+      const moves = input.preferredMoves.map(({ sessionId, room, start, end }) => ({ sessionId, room, start, end }));
+      const issues = validateRescuePlan(event, incident, { moves });
+      if (issues.length) {
+        preferredIndex = -1;
+        invalidatedSelection = { moves, issues };
+      } else {
+        preferredIndex = analysis.plans.findIndex(plan =>
+          moves.every(move => plan.moves.some(candidate => move.sessionId === candidate.sessionId && sameCandidate(move, candidate))));
+        if (preferredIndex === -1) {
+          analysis.plans.push({ moves });
+          preferredIndex = analysis.plans.length - 1;
+        }
+      }
+    }
     analysis.plans = analysis.plans.map(plan => ({
       ...plan, proof: signature(JSON.stringify([eventId, current.revision, incident, plan.moves])),
       impact: describeRescueImpact(event, plan),
     }));
-    return { state: current, analysis };
+    return { state: current, analysis, preferredIndex, invalidatedSelection };
   }
 
   function publishRescue(owner, eventId, input) {
@@ -606,7 +648,7 @@ export function createRegistrationStore(root, override, now = Date.now) {
 
   return {
     list, open, get: (owner, id) => state(findEvent(id, owner)), changeEvent, savePerson, publicEvent, publicSignup,
-    issueLink, revoke, confirmation, respond, importPeople, checkIn, recordActual, rescuePreview, publishRescue, close: () => db.close(),
+    issueLink, revoke, confirmation, respond, importPeople, checkIn, migrateCheckins, recordActual, rescuePreview, publishRescue, close: () => db.close(),
     mail: { db, now, transaction, findEvent, personFor, tokenFor, issueLink, mailSelect },
   };
 }

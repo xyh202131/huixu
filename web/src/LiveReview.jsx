@@ -42,10 +42,6 @@ export function Live({ event, readOnly, mobile, prepareRescue, registration }) {
     const form = new FormData(formElement);
     const code = form.get('code').trim().toUpperCase();
     if (scanning || !registration.current) return;
-    const person = event.attendees.find(item => item.id.toUpperCase() === code);
-    if (person && event.checkins.some(item => item.personId === person.id && item.sessionId === scanSession)) {
-      return setScanResult({ tone: 'warning', text: person.name + '已签到，人数保持不变。' });
-    }
     setScanning(true);
     try {
       const result = await registration.change('/checkins', 'POST', { code, sessionId: scanSession });
@@ -85,6 +81,10 @@ export function Live({ event, readOnly, mobile, prepareRescue, registration }) {
       <div className="running"><IconTile icon={Monitor} tone="blue" /><div><span>下一环节</span><strong>{next?.title ?? '活动结束'}</strong>
         {next && <small>{timeRange(next)} · {roomLabel(next.room)}</small>}</div></div>
     </Panel><Panel title="观众签到" action={<Badge tone="success">入场&nbsp;<MetricValue value={entranceCount} compact />&nbsp;人</Badge>}>
+      {!readOnly && registration.pendingCheckins > 0 && <Notice tone="warning">
+        {registration.migrationProblem || `有 ${registration.pendingCheckins} 条历史签到待同步。若原报名尚未迁移，请先在「报名与发布」导入旧名单。`}
+        <button type="button" className="button small" onClick={registration.refresh}>重试同步</button>
+      </Notice>}
       {!readOnly && <form className="form-stack" onSubmit={checkIn}>
         <Select label="签到点" value={scanSession} onChange={value => { setScanSession(value); setScanResult(null); }}
           options={[{ value: '', label: '活动入场' }, ...sessions.map(item => ({ value: item.id, label: checkinPoint(item) + ' · ' + item.title }))]} />

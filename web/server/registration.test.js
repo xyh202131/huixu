@@ -68,6 +68,35 @@ test('报名保存后跨连接可读，竞争同一分场时只保留一个名�
   assert.equal(other.get(owner, eventId).checkins[0].personId, first.id);
 });
 
+test('历史签到跨连接可见，保留原签到点并可在补齐报名后重试', async t => {
+  const { store, open } = await fixture(t);
+  const person = add(store, '历史签到演练', { status: '已取消', sessionId: 'session-2' });
+  const records = [
+    { personId: person.id.toLowerCase(), sessionId: '' },
+    { personId: person.id, sessionId: 'session-1' },
+    { personId: 'P-LEGACY', sessionId: 'old-session' },
+  ];
+  const api = registrationOwnerApi(store, createRegistrationMail(store, {}));
+  const origin = await listen(t, (request, response) => api(request, response, { id: owner }));
+  const migrate = () => fetch(origin + '/events/' + eventId + '/checkins/migrate', {
+    method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ records }),
+  }).then(async response => { assert.equal(response.status, 200); return response.json(); });
+  const first = await migrate();
+  const other = open();
+  assert.deepEqual(other.get(owner, eventId).checkins.map(record => ({ ...record })), [
+    { personId: person.id, sessionId: '' }, { personId: person.id, sessionId: 'session-1' },
+  ]);
+  assert.equal((await migrate()).revision, first.revision);
+  assert.equal(other.checkIn(owner, eventId, { code: person.id, sessionId: 'session-1' }).duplicate, true);
+
+  const rows = [{ name: '补录演练报名', id: 'P-LEGACY' }];
+  const preview = other.importPeople(owner, eventId, rows);
+  other.importPeople(owner, eventId, rows, preview.previewKey);
+  const afterImport = await migrate();
+  assert.deepEqual(afterImport.checkins.at(-1), records.at(-1));
+  assert.equal(other.get(owner, eventId).checkins.length, 3);
+});
+
 test('匿名确认只操作绑定的报名，重复提交、撤销、过期及名额释放', async t => {
   const { store, advance } = await fixture(t);
   const a = add(store, '演练甲', { status: '已确认', email: 'first@example.test', note: '内部', sessionId: 'session-1' });

@@ -299,7 +299,7 @@ export function ChangePage({ event, readOnly, publish, refreshMoveChange, naviga
     event.change.operationsKey !== JSON.stringify(rescueOperations(event)));
   return <>
     <PageHead heading="h3" title="变更单" description={readOnly ? '比较候选方案，查看发布影响和通知预览。' : '核对影响、比较方案，再统一发布。'} />
-    {rescueDraft ? <ActiveRescue key={JSON.stringify([event.change.id, event.change.revision, event.change.analysis.incident])}
+    {rescueDraft ? <ActiveRescue key={JSON.stringify([event.change.id, event.change.revision, event.change.analysis.incident, event.change.preferredIndex])}
       event={event} change={event.change} readOnly={readOnly} stale={stale} prepareRescue={prepareRescue} releaseRescue={releaseRescue} />
       : rescueRelease ? <ReleasedRescue release={latest} navigate={navigate} />
       : showDraft ? <ActiveChange key={event.change.id} event={event} readOnly={readOnly} publish={publish} refreshMoveChange={refreshMoveChange} /> : <Panel title={selectedRelease ? '发布记录' : latest ? '最近发布' : '待发布变更'}>

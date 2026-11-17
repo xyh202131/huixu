@@ -43,6 +43,9 @@ export function registrationOwnerApi(store, mail) {
         result = store.changeEvent(owner, eventId, await readJson(request, 180000), action === 'schedule');
       } else if (action === 'checkins' && method === 'POST' && !id) {
         result = store.checkIn(owner, eventId, await readJson(request));
+      } else if (action === 'checkins' && method === 'POST' && id === 'migrate' && !operation) {
+        const input = await readJson(request, 512 * 1024);
+        result = store.migrateCheckins(owner, eventId, input.records);
       } else if (action === 'actual' && method === 'POST' && !id) {
         result = store.recordActual(owner, eventId, await readJson(request));
       } else if (action === 'rescue' && method === 'POST' && !operation) {
