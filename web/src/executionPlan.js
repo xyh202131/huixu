@@ -64,6 +64,7 @@ export function assessExecutionPlan(event) {
   const agenda = [...event.agenda, ...staged.agenda];
   const issues = [];
   if (!planDate(event.date)) issues.push('填写活动日期');
+  if (!planNumber(event.capacity, 100000)) issues.push('填写活动预计人数（1–100000），用于确定报名总名额');
   if (!staged.agenda.length) issues.push('添加并采用至少一个环节');
   for (const room of staged.rooms) {
     if (!room.capacity) issues.push(roomLabel(room.id) + '需填写容量');

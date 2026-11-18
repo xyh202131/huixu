@@ -9,6 +9,7 @@ import { createTopicEvent, referencePlan } from '../src/topicPlan.js';
 import { conflictEvidenceKey } from '../src/organizationSchema.js';
 import { adoptExecutionPlan, assessExecutionPlan } from '../src/executionPlan.js';
 import { signupSnapshot } from '../src/registrationRules.js';
+import { checkCandidate } from '../src/scheduling.js';
 import { workspaceDraft, restoreWorkspaceDraft } from '../src/workspaceDraft.js';
 import { conversationContext } from '../src/agentConversation.js';
 import { workItems, agendaHours } from '../src/workItems.js';
@@ -95,6 +96,10 @@ test('两个连接交接私有草稿，过期变更被拒绝；嘉宾受限回�
   assert.throws(() => other.taskHandoff(handoff.token), /撤销/);
   assert.equal(state.event.agenda.length, 0);
   const check = assessExecutionPlan(staging);
+  assert.match(assessExecutionPlan({ ...staging, capacity: 0 }).issues.join(' '), /报名总名额/);
+  const noCapacity = signupSnapshot({ ...staging, ...check, capacity: 0, version: 1 });
+  assert.throws(() => other.changeEvent(owner, event.id, { revision: state.revision, event: noCapacity }, true), /报名总名额/);
+  assert.equal(first.get(owner, event.id).event.version, 0);
   state = other.changeEvent(owner, event.id, { revision: state.revision, event: signupSnapshot({ ...staging, ...check, version: 1 }) }, true);
   assert.equal(state.event.agenda[0].room, '报告厅');
   const input = { sessionId: state.event.agenda[0].id, taskId: staging.tasks[0].id };
@@ -113,6 +118,12 @@ test('两个连接交接私有草稿，过期变更被拒绝；嘉宾受限回�
   state = first.get(owner, event.id);
   assert.equal(state.operations.replies.length, 1);
   assert.deepEqual(state.operations.replies[0].availability, reopened.availability);
+  const session = state.event.agenda[0];
+  const rehearsal = { ...state.operations.replies[0], id: 'rehearsal', guestConfirmed: false, availability: { start: '08:00', end: '20:00' } };
+  for (const replies of [[...state.operations.replies, rehearsal], [rehearsal, ...state.operations.replies]]) {
+    const issues = checkCandidate({ ...state.event, replies }, { before: session }, { ...session, start: '17:00', end: '18:00' });
+    assert.ok(issues.some(message => message.includes('嘉宾可用时段为 13:00–17:00')));
+  }
   assert.equal(other.readDraft(owner, event.id).data.tasks[0].done, true);
   assert.equal(state.guestRequests[0].taskId, input.taskId);
   const request = state.guestRequests[0];

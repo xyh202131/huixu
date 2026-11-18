@@ -44,7 +44,8 @@ export function sessionPeople(event, session) {
   const guest = personKey(session.guest);
   const people = [];
   if (guest && guest !== '待确认' && guest !== '待定') {
-    const reply = replies.findLast(item => item.role === 'guest' && item.sessionId === session.id && personKey(item.name) === guest);
+    const matching = replies.filter(item => item.role === 'guest' && item.sessionId === session.id && personKey(item.name) === guest);
+    const reply = matching.findLast(item => item.guestConfirmed) ?? matching.at(-1);
     people.push({ id: guest, name: session.guest, role: '嘉宾', availability: reply?.availability });
   }
   for (const reply of replies) {

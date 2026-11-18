@@ -339,6 +339,7 @@ export function createRegistrationStore(root, override, now = Date.now) {
         if (event.version !== previous.version + 1) throw new RegistrationError(409, '议程已更新，请使用最新发布版本。');
         const people = peopleFor(eventId);
         if (previous.version === 0) {
+          if (!event.capacity) throw new RegistrationError(400, '首次发布须确认活动预计人数和报名总名额。');
           if (!event.date || !event.agenda.length) throw new RegistrationError(400, '首次发布须确认活动日期及议程。');
           for (const session of event.agenda) {
             const room = event.rooms.find(item => item.id === session.room);

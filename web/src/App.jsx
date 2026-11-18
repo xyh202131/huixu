@@ -173,7 +173,10 @@ function Workbench({ route, auth, useStoredEvents }) {
     if (received.size) event.tasks = event.tasks.map(task => received.has(String(task.id)) ? { ...task, done: true } : task);
     if (shared.operations) {
       const actual = { ...localEvent.actual, ...shared.operations.actual };
-      const replies = new Map([...shared.operations.replies, ...localEvent.replies].map(reply => [reply.id, reply]));
+      const replies = new Map(shared.operations.replies.map(reply => [reply.id, reply]));
+      for (const reply of localEvent.replies) {
+        if (!replies.get(reply.id)?.guestConfirmed) replies.set(reply.id, reply);
+      }
       event = { ...event, actual, replies: [...replies.values()], onsite: event.onsite || Object.values(actual).some(item => item.started) };
     }
     if (shared.event.version > 0 && shared.event.version >= localEvent.version) {
