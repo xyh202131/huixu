@@ -14,6 +14,13 @@ function publicConfig({ provider, protocol, baseUrl, model, keyHeader, key, revi
   return { provider, protocol, baseUrl, model, keyHeader, hasKey: Boolean(key), revision };
 }
 
+export function browserConnectionFrom(input, user) {
+  if (user?.id && input?.ownerId !== user.id) {
+    return { error: '模型配置与当前账号不匹配。请刷新工作台，在当前账号的模型设置中重新保存。' };
+  }
+  return connectionFrom(input);
+}
+
 export function connectionFrom(input, saved) {
   const provider = input?.provider;
   const preset = typeof provider === 'string' && Object.hasOwn(modelPresets, provider) ? modelPresets[provider] : null;

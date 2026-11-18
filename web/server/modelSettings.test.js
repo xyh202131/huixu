@@ -95,6 +95,7 @@ test('模型设置按用途启用、验收和恢复共享配置', async t => {
   assert.equal((await request('/api/workbench-session', credentials)).status, 201);
   const login = await request('/api/auth/sign-in/email', credentials);
   assert.equal(login.status, 200);
+  const { user } = await login.json();
   cookie = login.headers.getSetCookie().map(item => item.split(';', 1)[0]).join('; ');
   assert.equal((await request(settings, undefined, { requestOrigin: 'https://example.test' })).status, 403);
   assert.equal((await (await request(settings)).json()).source, 'environment');
@@ -171,7 +172,7 @@ test('模型设置按用途启用、验收和恢复共享配置', async t => {
   }
   scope.revision = 'browser-configuration';
   const browserOrganized = await (await request('/api/project-organization?event=forum', {
-    connection: { ...custom, model: 'browser-organization', apiKey: 'fixture-browser-organization-key' },
+    connection: { ...custom, ownerId: user.id, model: 'browser-organization', apiKey: 'fixture-browser-organization-key' },
   })).json();
   assert.equal(browserOrganized.review.model, 'browser-organization');
   assert.equal(received.at(-1).key, 'fixture-browser-organization-key');

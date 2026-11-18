@@ -22,8 +22,9 @@ export function importSource(eventId, file, agentAccess) {
   });
 }
 
-export async function organizationRequest(eventId, method = 'GET', signal) {
-  const connection = method === 'POST' ? await browserModel('organization') : null;
+export async function organizationRequest(eventId, method = 'GET', signal, ownerId) {
+  if (method === 'POST' && !ownerId) throw new Error('请先登录负责人账号再整理资料。');
+  const connection = method === 'POST' ? await browserModel('organization', ownerId) : null;
   const response = await fetch('/api/project-organization?' + new URLSearchParams({ event: eventId }), {
     method, signal, ...(connection && { headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ connection }) }),
   });

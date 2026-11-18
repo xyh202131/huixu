@@ -60,6 +60,8 @@ export function reviewChoices(review, saved) {
 export function planFromReview(review, choices) {
   const plan = { event: {}, agenda: [], roster: [], venues: [], budgetItems: [] };
   const rows = new Map();
+  const reviewedNames = new Set(review.facts.filter(fact => fact.field === 'name')
+    .map(fact => `${fact.section}:${fact.entityKey}`));
   for (const fact of review.facts) {
     const { section, entity, entityKey, field, key, options } = fact;
     let selected = options.length === 1 ? options[0] : null;
@@ -70,7 +72,9 @@ export function planFromReview(review, choices) {
     }
     const rowKey = `${section}:${entityKey}`;
     if (!rows.has(rowKey)) {
-      const row = { id: rowKey, name: entity };
+      const row = { id: rowKey };
+      // 旧提取结果可能只有其他字段，此时仍用原文中的实体名标识该行。
+      if (!reviewedNames.has(rowKey)) row.name = entity;
       rows.set(rowKey, row);
       plan[section].push(row);
     }

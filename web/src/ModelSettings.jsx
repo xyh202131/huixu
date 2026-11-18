@@ -18,7 +18,7 @@ function settingsFields(provider, saved) {
     keyHeader: preset?.keyHeader ?? 'x-api-key', apiKey: '' };
 }
 
-function ModelSettingsForm({ purpose }) {
+function ModelSettingsForm({ purpose, ownerId }) {
   const [status, setStatus] = useState(null);
   const [form, setForm] = useState(() => settingsFields('openai'));
   const [busy, setBusy] = useState('load');
@@ -42,7 +42,7 @@ function ModelSettingsForm({ purpose }) {
     setFeedback(null);
     setBusy('load');
     try {
-      const next = await browserModelSettings(purpose);
+      const next = await browserModelSettings(purpose, ownerId);
       if (!signal.aborted) applyStatus(next);
     } catch (error) {
       if (!signal.aborted) setFeedback({ tone: 'error', text: error.message });
@@ -56,7 +56,7 @@ function ModelSettingsForm({ purpose }) {
     request.current = controller;
     void load(controller.signal);
     return () => controller.abort();
-  }, [purpose]);
+  }, [purpose, ownerId]);
 
   function update(field, value) {
     setFeedback(null);
@@ -70,8 +70,8 @@ function ModelSettingsForm({ purpose }) {
     setBusy(action);
     try {
       if (action === 'remove') {
-        await removeBrowserModel(purpose);
-        const next = await browserModelSettings(purpose);
+        await removeBrowserModel(purpose, ownerId);
+        const next = await browserModelSettings(purpose, ownerId);
         if (signal.aborted) return;
         applyStatus(next);
         setFeedback({ tone: 'success', text: '当前浏览器的配置已移除。' });
@@ -86,8 +86,8 @@ function ModelSettingsForm({ purpose }) {
         setFeedback({ tone: 'success', text });
         return;
       }
-      await saveBrowserModel(purpose, input);
-      const next = await browserModelSettings(purpose);
+      await saveBrowserModel(purpose, input, ownerId);
+      const next = await browserModelSettings(purpose, ownerId);
       if (signal.aborted) return;
       applyStatus(next);
       setFeedback({ tone: 'success', text: '已保存到当前浏览器并启用。' });
@@ -138,7 +138,7 @@ function ModelSettingsForm({ purpose }) {
         <label>API Key{custom && !keepKey ? '（如接口需要）' : ''}<input type="password" autoComplete="off" spellCheck={false}
           required={!custom && !keepKey} maxLength={4096} value={form.apiKey} onChange={event => update('apiKey', event.target.value)}
           placeholder={keepKey ? '已保存，留空沿用' : '填写服务商 API Key'} /></label>
-        <p className="muted">配置和密钥保存在当前浏览器，刷新后可继续使用。请求经本机服务转发至所选模型接口。共享设备用完后可移除配置。</p>
+        <p className="muted">{ownerId ? '保存后，当前账号可使用此接口处理已授权的活动资料。' : '此配置仅供当前浏览器的访客使用。'} 配置和密钥保存在本浏览器，旧版配置需重新填写。</p>
         <p className="muted">{isOrganization ? '资料整理可单独配置模型。测试使用演练资料核对冲突字段与原文出处。'
           : '测试使用示例问题验证连接、工具调用和结果回传，可能消耗少量模型额度。'}</p>
       </fieldset>
@@ -156,11 +156,11 @@ function ModelSettingsForm({ purpose }) {
   </>;
 }
 
-export function ModelSettings({ close }) {
+export function ModelSettings({ close, ownerId }) {
   const [label, setLabel] = useState(chatLabel);
   const purpose = label === organizationLabel ? 'organization' : 'chat';
   return <Dialog title="模型设置" className="model-settings-dialog" fullOnMobile close={close}>
     <Tabs label="模型用途" items={[chatLabel, organizationLabel]} value={label} onChange={setLabel} />
-    <ModelSettingsForm key={purpose} purpose={purpose} />
+    <ModelSettingsForm key={purpose} purpose={purpose} ownerId={ownerId} />
   </Dialog>;
 }

@@ -7,7 +7,7 @@ import { Select } from './Select';
 import { createTopicEvent, referencePlan, topicActivityType } from './topicPlan';
 import { browserModel } from './browserModels';
 
-export function TopicPlanForm({ events, initialTopic, create, signedIn }) {
+export function TopicPlanForm({ events, initialTopic, create, ownerId }) {
   const [pending, setPending] = useState(false);
   const [error, setError] = useState('');
   const request = useRef(null);
@@ -32,8 +32,8 @@ export function TopicPlanForm({ events, initialTopic, create, signedIn }) {
     setPending(true);
     setError('');
     try {
-      const connection = await browserModel();
-      const response = await fetch(signedIn ? '/api/topic-plan' : '/api/browser-topic-plan', {
+      const connection = await browserModel('chat', ownerId);
+      const response = await fetch(ownerId ? '/api/topic-plan' : '/api/browser-topic-plan', {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ topic, type, audience: input.audience, slots: reference?.slots, lessons: reference?.lessons, connection: connection ?? undefined }), signal: controller.signal,
       });

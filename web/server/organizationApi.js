@@ -1,11 +1,11 @@
 import { isLocalRequest, readBody, sendJson } from './localApi.js';
 import { organizeSources } from './organizeSources.js';
-import { connectionFrom } from './modelSettings.js';
+import { browserConnectionFrom } from './modelSettings.js';
 
 export function createOrganizationHandler(getModelConfig, memory) {
   const running = new Map();
 
-  return async (request, response) => {
+  return async (request, response, user) => {
     if (!isLocalRequest(request)) return sendJson(response, 403, { error: '智能整理仅供本机工作台访问。' });
     const eventId = new URL(request.url, 'http://localhost').searchParams.get('event');
     if (!/^[\w-]{1,128}$/.test(eventId ?? '')) return sendJson(response, 400, { error: '请指定有效的活动。' });
@@ -19,7 +19,7 @@ export function createOrganizationHandler(getModelConfig, memory) {
         let input;
         try { input = JSON.parse(body.toString('utf8')); } catch { return sendJson(response, 400, { error: '模型配置格式无效。' }); }
         if (input?.connection !== undefined) {
-          const result = connectionFrom(input.connection);
+          const result = browserConnectionFrom(input.connection, user);
           if (result.error) return sendJson(response, 400, { error: result.error });
           browserConfig = result.config;
         }

@@ -92,6 +92,29 @@ test('字段可改值、忽略或重新核对，局部更新保留草稿手工�
   assert.ok(currentReviewChoice(capacity, saved));
 });
 
+test('生成和局部同步草稿按核对结果填写名称，其他字段和旧版实体名可保留', () => {
+  for (const [section, field] of Object.entries({ agenda: 'room', roster: 'role', venues: 'capacity', budgetItems: 'amount' })) {
+    const fact = { key: 'name', section, entityKey: 'sample', entity: '样例名称', field: 'name',
+      options: [{ value: '样例名称', evidence: [] }] };
+    const detail = { ...fact, key: field, field, options: [{ value: '其他值', evidence: [] }] };
+    for (const status of ['已忽略', '待核对']) {
+      for (const facts of [[fact], [fact, detail], [detail, fact]]) {
+        const review = { facts };
+        const choices = reviewChoices(review, { name: { value: fact.entity, status, evidence: conflictEvidenceKey(fact) } });
+        const [row] = planFromReview(review, choices)[section];
+        assert.equal(row.name, undefined);
+        if (facts.includes(detail)) {
+          assert.equal(row[field], '其他值');
+          const synced = applyReviewFields({ event: {}, [section]: [] }, review, choices, [field]);
+          assert.equal(synced[section][0].name, undefined);
+        }
+      }
+    }
+    assert.equal(planFromReview({ facts: [detail] }, {})[section][0].name, '样例名称');
+    assert.equal(planFromReview({ facts: [detail, fact] }, { name: '负责人修订' })[section][0].name, '负责人修订');
+  }
+});
+
 test('局部同步也保留尚未保存的文本、增删行，并接收其他字段的最新值', () => {
   const previous = { event: { title: '原活动', venue: '原场地' }, agenda: [{ id: 'a', name: '圆桌', start: '14:00', end: '14:40' }, { id: 'b', name: '旧环节' }] };
   const next = { ...previous, event: { ...previous.event, venue: '新场地' }, agenda: [{ ...previous.agenda[0], start: '14:10' }, previous.agenda[1]] };

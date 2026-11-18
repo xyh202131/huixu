@@ -72,13 +72,13 @@ function ActivitySections(props) {
   });
 }
 
-function CreateEvent({ draft, events, create, close, signedIn }) {
+function CreateEvent({ draft, events, create, close, ownerId }) {
   const defaults = draft?.proposal ?? planFromText(draft?.text ?? '', '行业论坛');
   const importMode = Boolean(draft?.importMode);
   const [mode, setMode] = useState(draft?.proposal || importMode ? '手动创建' : '从主题生成');
   return <Dialog title={importMode ? '导入活动项目' : '新建活动'} close={close}>
     {!importMode && <div className="create-event-tabs"><Tabs label="创建方式" items={['从主题生成', '手动创建']} value={mode} onChange={setMode} /></div>}
-    {mode === '从主题生成' ? <TopicPlanForm events={events} initialTopic={draft?.text} create={create} signedIn={signedIn} /> :
+    {mode === '从主题生成' ? <TopicPlanForm events={events} initialTopic={draft?.text} create={create} ownerId={ownerId} /> :
     <form className="form-stack" onSubmit={e => {
       e.preventDefault();
       const form = new FormData(e.currentTarget);
@@ -430,7 +430,7 @@ function Workbench({ route, auth, useStoredEvents }) {
     setOrganizationRuns(current => ({ ...current, [eventId]: { token, pending: run } }));
     if (!run) return;
     try {
-      await organizationRequest(eventId, 'POST');
+      await organizationRequest(eventId, 'POST', undefined, account?.id);
       if (organizationRequests.current[eventId] === token) {
         setOrganizationRuns(current => ({ ...current, [eventId]: { token, pending: false } }));
       }
@@ -541,7 +541,7 @@ function Workbench({ route, auth, useStoredEvents }) {
     setAgentRun({ eventId: event.id, question, pending: true });
     try {
       const previous = conversation.current.get(event.id) ?? [];
-      const result = await askModel(question, event, request.signal, Boolean(account), previous.map(entry => entry.context));
+      const result = await askModel(question, event, request.signal, account?.id, previous.map(entry => entry.context));
       if (!request.signal.aborted) {
         const run = { ...result, eventId: event.id, question };
         if (!result.error) conversation.current.set(event.id, [...previous, { run, context: rememberTurn(event, question, result) }].slice(-4));
@@ -638,14 +638,14 @@ function Workbench({ route, auth, useStoredEvents }) {
             openSource={chunkId => navigate(`sources/${chunkId}`)} openReviewedChange={id => navigate(id ? `change/released/${id}` : 'change')} />
         </div>
       </div>}
-    {modal === 'create' && <CreateEvent key={draft?.text ?? (draft?.importMode ? 'import' : 'new')} draft={draft} events={events} create={create} signedIn={Boolean(account)} close={() => setModal('')} />}
+    {modal === 'create' && <CreateEvent key={draft?.text ?? (draft?.importMode ? 'import' : 'new')} draft={draft} events={events} create={create} ownerId={account?.id} close={() => setModal('')} />}
     {modal === 'team' && <TeamBoard events={events.map(item => item.id === event.id ? event : item)} close={() => setModal('')} open={(id, target, change) => {
       if (change) setEvents(list => list.map(item => item.id === id && item.change?.id !== change.id
         ? { ...item, change, draftChanges: [item.change, ...(item.draftChanges ?? [])].filter(row => row && row.id !== change.id) } : item));
       select(id, target);
     }} />}
     {modal === 'account' && <AccountDialog {...auth} openTeam={() => setModal('team')} close={() => setModal('')} />}
-    {modal === 'settings' && <ModelSettings close={() => setModal('')} />}
+    {modal === 'settings' && <ModelSettings ownerId={account?.id} close={() => setModal('')} />}
     {modal === 'draft' && account && <WorkspaceDraftDialog event={event} update={update} notify={notify} close={() => setModal('')} />}
     <Toast feedback={toast} dismiss={dismissToast} />
   </>;

@@ -5,6 +5,7 @@ import { modelInput } from '../src/browserModels.js';
 import { createAgentHandler } from './agent.js';
 import { createBrowserModelTest } from './browserModelApi.js';
 import { readBody, sendJson } from './localApi.js';
+import { createOrganizationHandler } from './organizationApi.js';
 import { createTopicPlanHandler } from './topicPlanApi.js';
 
 async function listen(t, handler) {
@@ -67,6 +68,21 @@ test('访客自带模型完成工具测试和对话，每次请求独立且无�
   assert.equal((await missing.json()).code, 'MODEL_NOT_CONFIGURED');
 });
 
+test('私有对话、主题起草和资料整理拒绝未绑定及其他账号的浏览器配置', async t => {
+  const handlers = { '/agent': createAgentHandler(() => null, null), '/topic': createTopicPlanHandler(() => null),
+    '/organize': createOrganizationHandler(() => null, null) };
+  const origin = await listen(t, (request, response) => handlers[new URL(request.url, 'http://localhost').pathname](
+    request, response, { id: 'owner-a' }));
+  for (const route of Object.keys(handlers)) {
+    for (const ownerId of [undefined, 'owner-b']) {
+      const response = await fetch(origin + route + '?event=forum', { method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ topic: '示例论坛', type: '行业论坛', connection: { ownerId } }) });
+      assert.equal(response.status, 400);
+      assert.match((await response.json()).error, /当前账号/);
+    }
+  }
+});
+
 test('浏览器模型覆盖当前负责人后备配置并用于主题方案', async t => {
   let sharedReads = 0;
   const provider = await listen(t, async (request, response) => {
@@ -78,9 +94,9 @@ test('浏览器模型覆盖当前负责人后备配置并用于主题方案', as
     return sendJson(response, 200, { choices: [{ message: { tool_calls: [{ id: 'plan', type: 'function', function: { name: 'submit_plan', arguments: JSON.stringify(suggestions) } }] } }] });
   });
   const handler = createTopicPlanHandler(() => { sharedReads += 1; return null; });
-  const origin = await listen(t, handler);
+  const origin = await listen(t, (request, response) => handler(request, response, { id: 'owner-a' }));
   const response = await fetch(origin, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({
-    topic: '社区交流', type: '行业论坛', connection: { provider: 'custom', protocol: 'openai', baseUrl: provider + '/v1', model: 'browser-topic', apiKey: 'fixture-topic-key' },
+    topic: '社区交流', type: '行业论坛', connection: { ownerId: 'owner-a', provider: 'custom', protocol: 'openai', baseUrl: provider + '/v1', model: 'browser-topic', apiKey: 'fixture-topic-key' },
   }) });
   assert.equal(response.status, 200);
   assert.equal((await response.json()).suggestions.agenda.length, 3);

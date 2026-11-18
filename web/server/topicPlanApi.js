@@ -1,7 +1,7 @@
 import { activityTypes } from '../src/model.js';
 import { isLocalRequest, readBody, sendJson } from './localApi.js';
 import { requestModel } from './modelProvider.js';
-import { connectionFrom } from './modelSettings.js';
+import { browserConnectionFrom } from './modelSettings.js';
 
 const text = (value, limit = 120) => typeof value === 'string' ? value.trim().slice(0, limit) : '';
 const stringField = { type: 'string' };
@@ -48,7 +48,7 @@ function readSuggestions(value) {
 }
 
 export function createTopicPlanHandler(getModelConfig) {
-  return async (request, response) => {
+  return async (request, response, user) => {
     if (!isLocalRequest(request)) return sendJson(response, 403, { error: '主题起草仅供本机工作台访问。' });
     if (request.method !== 'POST') return sendJson(response, 405, { error: '不支持此操作。' });
     let input;
@@ -61,7 +61,7 @@ export function createTopicPlanHandler(getModelConfig) {
     }
     const topic = text(input?.topic, 100);
     if (!topic || !activityTypes.includes(input.type)) return sendJson(response, 400, { error: '请填写主题并选择有效的活动类型。' });
-    const { config, error } = input?.connection === undefined ? { config: getModelConfig() } : connectionFrom(input.connection);
+    const { config, error } = input?.connection === undefined ? { config: getModelConfig() } : browserConnectionFrom(input.connection, user);
     if (error) return sendJson(response, 400, { error });
     if (!config) return sendJson(response, 200, { fallback: '模型未配置，已使用本机模板。' });
     const controller = new AbortController();

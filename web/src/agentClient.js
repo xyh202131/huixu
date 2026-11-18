@@ -4,9 +4,9 @@ import { reservesSeat } from './registrationRules';
 import { browserModel } from './browserModels';
 import { workItems } from './workItems';
 
-export async function askModel(question, event, signal, signedIn = false, history = []) {
-  const connection = await browserModel();
-  if (!signedIn && !connection) return { code: 'MODEL_NOT_CONFIGURED', error: '请先在右上角模型设置中填写并保存 API Key，即可开始使用 Agent。' };
+export async function askModel(question, event, signal, ownerId, history = []) {
+  const connection = await browserModel('chat', ownerId);
+  if (!ownerId && !connection) return { code: 'MODEL_NOT_CONFIGURED', error: '请先在右上角模型设置中填写并保存 API Key，即可开始使用 Agent。' };
   const registrations = new Map();
   for (const person of event.attendees) {
     const totals = registrations.get(person.sessionId) ?? { confirmed: 0, waitlisted: 0, pending: 0 };
@@ -28,7 +28,7 @@ export async function askModel(question, event, signal, signedIn = false, histor
   const pending = workItems(event);
   const snapshot = {
     id: event.id, title: event.title, date: event.date, venue: event.venue, type: event.type, version: event.version,
-    choices: signedIn ? Object.fromEntries(Object.entries(event.organizationChoices ?? {}).filter(([key, choice]) =>
+    choices: ownerId ? Object.fromEntries(Object.entries(event.organizationChoices ?? {}).filter(([key, choice]) =>
       choice?.value && (!choice.status || choice.status === '已确认') && !key.startsWith('["roster",')).slice(0, 120)
       .map(([key, { value, evidence }]) => [key, { value, evidence }])) : undefined,
     agenda,
@@ -48,7 +48,7 @@ export async function askModel(question, event, signal, signedIn = false, histor
       lessons: (event.organizedPlan?.reference?.lessons ?? []).map(item => item.condition + ' · ' + item.advice),
     },
   };
-  const response = await fetch(signedIn ? '/api/agent' : '/api/browser-agent', {
+  const response = await fetch(ownerId ? '/api/agent' : '/api/browser-agent', {
     method: 'POST', signal, headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ question, event: snapshot, history, connection: connection ?? undefined }),
   });
   if (response.status === 401) window.dispatchEvent(new Event(sessionExpired));

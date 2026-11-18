@@ -10,15 +10,17 @@ function openModels() {
   });
 }
 
-async function storedModel(purpose, action, value) {
+async function storedModel(purpose, ownerId, action, value) {
+  // 旧版按用途保存，无法确认归属。新读写只访问当前身份的分区。
+  const key = ownerId ? ['owner', ownerId, purpose] : ['guest', purpose];
   const database = await openModels();
   return new Promise((resolve, reject) => {
     const transaction = database.transaction('connections', action === 'get' ? 'readonly' : 'readwrite');
     const store = transaction.objectStore('connections');
     let request;
-    if (action === 'get') request = store.get(purpose);
-    else if (action === 'save') request = store.put(value, purpose);
-    else request = store.delete(purpose);
+    if (action === 'get') request = store.get(key);
+    else if (action === 'save') request = store.put(value, key);
+    else request = store.delete(key);
     transaction.oncomplete = () => {
       database.close();
       resolve(action === 'get' ? request.result ?? null : value);
@@ -30,14 +32,15 @@ async function storedModel(purpose, action, value) {
   });
 }
 
-export async function browserModelSettings(purpose = 'chat') {
-  const saved = await storedModel(purpose, 'get');
-  const active = saved ?? (purpose === 'organization' ? await storedModel('chat', 'get') : null);
+export async function browserModelSettings(purpose = 'chat', ownerId) {
+  const saved = await storedModel(purpose, ownerId, 'get');
+  const active = saved ?? (purpose === 'organization' ? await storedModel('chat', ownerId, 'get') : null);
   return { saved, active, shared: !saved && purpose === 'organization' };
 }
 
-export async function browserModel(purpose = 'chat') {
-  return (await browserModelSettings(purpose)).active;
+export async function browserModel(purpose = 'chat', ownerId) {
+  const { active } = await browserModelSettings(purpose, ownerId);
+  return active && ownerId ? { ...active, ownerId } : active;
 }
 
 export function modelInput(form, saved) {
@@ -61,12 +64,12 @@ export function modelInput(form, saved) {
   return { provider: form.provider, protocol, baseUrl, model, keyHeader, apiKey };
 }
 
-export function saveBrowserModel(purpose, config) {
-  return storedModel(purpose, 'save', config);
+export function saveBrowserModel(purpose, config, ownerId) {
+  return storedModel(purpose, ownerId, 'save', config);
 }
 
-export function removeBrowserModel(purpose) {
-  return storedModel(purpose, 'remove');
+export function removeBrowserModel(purpose, ownerId) {
+  return storedModel(purpose, ownerId, 'remove');
 }
 
 export async function testBrowserModel(purpose, connection, signal) {

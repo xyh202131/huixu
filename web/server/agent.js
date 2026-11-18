@@ -4,7 +4,7 @@ import { analyzeRescue, rescueSummary } from '../src/rescueScheduling.js';
 import { isArchiveName } from '../src/sourceFormats.js';
 import { isLocalRequest, readBody, sendJson as send } from './localApi.js';
 import { requestModel, toolMessages } from './modelProvider.js';
-import { connectionFrom } from './modelSettings.js';
+import { browserConnectionFrom } from './modelSettings.js';
 import { conversationContext } from '../src/agentConversation.js';
 import { currentReviewChoice, planSections } from '../src/organizationSchema.js';
 
@@ -231,7 +231,7 @@ async function runModel(config, question, event, memory, signal, history) {
 
 export function createAgentHandler(getModelConfig, memory) {
   let active = 0;
-  return async (request, response) => {
+  return async (request, response, user) => {
     if (request.method !== 'POST') return send(response, 405, { error: '此接口仅接受 POST。' });
     if (!isLocalRequest(request)) {
       return send(response, 403, { error: 'Agent 演练接口只允许本机工作台访问。' });
@@ -249,7 +249,7 @@ export function createAgentHandler(getModelConfig, memory) {
       try { input = JSON.parse(body.toString('utf8')); } catch {
         return send(response, 400, { error: '请求内容无效。' });
       }
-      const { config, error } = input?.connection === undefined ? { config: getModelConfig() } : connectionFrom(input.connection);
+      const { config, error } = input?.connection === undefined ? { config: getModelConfig() } : browserConnectionFrom(input.connection, user);
       if (error) return send(response, 400, { error });
       if (!config) return send(response, 503, { code: 'MODEL_NOT_CONFIGURED', error: '尚未配置模型。可在工作台右上角的模型设置中添加。' });
       const question = limit(input?.question, 2000);
