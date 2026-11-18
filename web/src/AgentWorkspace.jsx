@@ -38,8 +38,8 @@ function AgentResponse({ run, event, ask, stop, askLocal, openSettings, reviewPr
       </li>)}</ol>
     </details>}
     {run.model && <p className="agent-evidence">模型 · {run.model}</p>}
-    {run.proposal?.kind === 'move' && run.proposal.analysis && <MoveAnalysis proposal={run.proposal} event={event} selectCandidate={selectCandidate} reviewProposal={reviewProposal} />}
-    {run.proposal?.kind === 'rescue' && <RescueProposal proposal={run.proposal} reviewProposal={reviewProposal} selectCandidate={selectCandidate} />}
+    {run.proposal?.kind === 'move' && run.proposal.analysis && <MoveAnalysis proposal={run.proposal} event={event} selected={run.context.selected} selectCandidate={selectCandidate} reviewProposal={reviewProposal} />}
+    {run.proposal?.kind === 'rescue' && <RescueProposal proposal={run.proposal} selected={run.context.selected} reviewProposal={reviewProposal} selectCandidate={selectCandidate} />}
     {run.proposal?.kind === 'event' && <button type="button" className="button primary" onClick={() => reviewProposal()}>打开活动草稿</button>}
     {released && <>
       <Notice tone="success" announce>{released.title}已发布 · v{released.version}</Notice>
@@ -49,13 +49,13 @@ function AgentResponse({ run, event, ask, stop, askLocal, openSettings, reviewPr
   </>;
 }
 
-function RescueProposal({ proposal, reviewProposal, selectCandidate }) {
+function RescueProposal({ proposal, selected, reviewProposal, selectCandidate }) {
   const { analysis } = proposal;
-  const [index, setIndex] = useState(0);
+  const index = selected - 1;
   return <section className="agent-move-analysis" aria-label="整场救场分析">
     <h3>{analysis.affected.length} 个受影响环节</h3>
     {analysis.plans.length > 0 && <div className="selection-list">{analysis.plans.map((plan, position) =>
-      <button type="button" key={position} aria-pressed={index === position} onClick={() => { setIndex(position); selectCandidate(position + 1); }}>
+      <button type="button" key={position} aria-pressed={index === position} onClick={() => selectCandidate(position + 1)}>
         <strong>方案 {position + 1}{position === 0 && ' · 推荐'}</strong><Badge tone="success">组合校验通过</Badge>
         <span className="choice-note">{plan.moves.map(move => roomLabel(move.room) + ' ' + timeRange(move)).join(' · ')}</span>
       </button>)}</div>}
@@ -64,11 +64,11 @@ function RescueProposal({ proposal, reviewProposal, selectCandidate }) {
   </section>;
 }
 
-function MoveAnalysis({ proposal, event, reviewProposal, selectCandidate }) {
+function MoveAnalysis({ proposal, event, selected, reviewProposal, selectCandidate }) {
   const { requested, alternatives, blocked, window } = proposal.analysis;
   const { affected } = proposal;
   const options = [requested, ...alternatives];
-  const [selection, setSelection] = useState(() => requested.issues.length && alternatives.length ? 1 : 0);
+  const selection = selected - 1;
   const { candidate, issues } = options[selection];
   const room = event.rooms.find(item => item.id === candidate.room);
   const session = event.agenda.find(item => item.id === proposal.before.id);
@@ -79,7 +79,7 @@ function MoveAnalysis({ proposal, event, reviewProposal, selectCandidate }) {
       <p><small>所选方案</small><strong>{roomLabel(candidate.room)}</strong><span>{timeRange(candidate)}</span></p>
     </div>
     <div className="selection-list" aria-label="选择调整方案">{options.map(({ candidate: option, issues: blockers }, index) => <button type="button"
-      key={`${option.room}/${option.start}/${option.end}`} aria-pressed={selection === index} onClick={() => { setSelection(index); selectCandidate(index + 1); }}>
+      key={`${option.room}/${option.start}/${option.end}`} aria-pressed={selection === index} onClick={() => selectCandidate(index + 1)}>
       <span className="radio-mark" aria-hidden="true" /><strong>{roomLabel(option.room)} · {timeRange(option)}</strong>
       <Badge tone={blockers.length ? 'amber' : 'success'}>{blockers.length ? '存在冲突' : '校验通过'}</Badge>
       <span className="choice-note">方案 {index + 1} · {index === 0 ? '原请求' : '备选'}{blockers.length > 0 && ' · ' + blockers.join('、')}</span>

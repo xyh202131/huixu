@@ -33,18 +33,41 @@ function terms(text, forIndex = false) {
   return [...tokens];
 }
 
-function initialize(db) {
-  db.exec(`
-    PRAGMA journal_mode = WAL;
-    PRAGMA foreign_keys = ON;
-    PRAGMA busy_timeout = 5000;
-    CREATE TABLE IF NOT EXISTS memory_sources (
+const sourceColumns = `(
       id TEXT PRIMARY KEY, event_id TEXT NOT NULL, name TEXT NOT NULL,
       revision INTEGER NOT NULL, hash TEXT NOT NULL, size INTEGER NOT NULL, original BLOB NOT NULL,
       state TEXT NOT NULL, note TEXT NOT NULL, agent_access INTEGER NOT NULL, chunk_count INTEGER NOT NULL,
       imported_at TEXT NOT NULL,
-      UNIQUE(event_id, name, revision), UNIQUE(event_id, name, hash)
-    );
+      UNIQUE(event_id, name, revision)
+    )`;
+
+function initialize(db) {
+  db.exec('PRAGMA busy_timeout = 5000; PRAGMA journal_mode = WAL;');
+  const hasContentIndex = db.prepare("SELECT 1 FROM sqlite_master WHERE type='index' AND tbl_name='memory_sources' AND name='memory_sources_hash'");
+  if (!hasContentIndex.get()) {
+    // 旧版将内容摘要设为唯一键。保留原件、主键及所有片段引用，只解除版本间的摘要唯一约束。
+    db.exec('PRAGMA foreign_keys = OFF; BEGIN IMMEDIATE');
+    try {
+      if (!hasContentIndex.get()) {
+        const previous = db.prepare("SELECT 1 FROM sqlite_master WHERE type='table' AND name='memory_sources'").get();
+        if (previous) {
+          db.exec(`CREATE TABLE memory_sources_v2 ${sourceColumns};
+            INSERT INTO memory_sources_v2 SELECT * FROM memory_sources;
+            DROP TABLE memory_sources;
+            ALTER TABLE memory_sources_v2 RENAME TO memory_sources;`);
+        } else db.exec(`CREATE TABLE memory_sources ${sourceColumns}`);
+        db.exec('CREATE INDEX memory_sources_hash ON memory_sources(event_id, name, hash, revision);');
+      }
+      db.exec('COMMIT');
+    } catch (error) {
+      db.exec('ROLLBACK');
+      throw error;
+    } finally {
+      db.exec('PRAGMA foreign_keys = ON');
+    }
+  }
+  db.exec(`
+    PRAGMA foreign_keys = ON;
     CREATE TABLE IF NOT EXISTS memory_chunks (
       id INTEGER PRIMARY KEY, source_id TEXT NOT NULL REFERENCES memory_sources(id),
       location TEXT NOT NULL, body TEXT NOT NULL
@@ -85,16 +108,24 @@ export function createProjectMemory(root, override) {
       FROM memory_sources s WHERE event_id = ? ORDER BY imported_at DESC, name, revision DESC`).all(eventId);
   }
 
-  async function add(eventId, name, buffer, agentAccess) {
+  async function add(eventId, name, buffer, agentAccess, replacementId) {
     const db = getDb();
     const hash = createHash('sha256').update(buffer).digest('hex');
-    const getExisting = db.prepare(`SELECT ${sourceFields} FROM memory_sources s WHERE event_id = ? AND name = ? AND hash = ?`);
-    const previous = getExisting.get(eventId, name, hash);
+    const getExisting = db.prepare(`SELECT ${sourceFields} FROM memory_sources s WHERE event_id = ? AND name = ? AND hash = ? ORDER BY revision DESC LIMIT 1`);
+    const previous = !replacementId && getExisting.get(eventId, name, hash);
     if (previous && (previous.chunkCount || !retryable.has(previous.state))) return { source: previous, duplicate: true };
     const parsed = await parseSource(name, buffer);
     db.exec('BEGIN IMMEDIATE');
     try {
-      const existing = getExisting.get(eventId, name, hash);
+      let existing;
+      if (replacementId) {
+        const target = db.prepare(`SELECT ${sourceFields} FROM memory_sources s
+          WHERE s.id = ? AND s.event_id = ? AND s.name = ? AND ${currentSource}`).get(replacementId, eventId, name);
+        if (!target) throw Object.assign(new Error('要替换的资料已更新，请刷新后选择当前版本。'), { status: 409 });
+        agentAccess = Boolean(target.agentAccess) && target.reviewStatus !== '已停用';
+      } else {
+        existing = getExisting.get(eventId, name, hash);
+      }
       if (existing && (existing.chunkCount || !retryable.has(existing.state) || !parsed.chunks.length && parsed.state === existing.state)) {
         db.exec('COMMIT');
         return { source: existing, duplicate: true };

@@ -78,8 +78,9 @@ export function createMemoryHandler(memory) {
         if (!buffer) return sendJson(response, 413, sizeError);
         if (!buffer.length) return sendJson(response, 400, { error: '文件为空。' });
         const agentAccess = url.searchParams.get('agent') === '1';
-        const result = await memory.add(eventId, name, buffer, agentAccess);
-        if (agentAccess && !result.source.agentAccess && memory.setAgentAccess(eventId, result.source.id, true)) {
+        if (view === 'replace' && !sourceId) return sendJson(response, 400, { error: '请选择要替换的资料。' });
+        const result = await memory.add(eventId, name, buffer, agentAccess, view === 'replace' ? sourceId : undefined);
+        if (view !== 'replace' && agentAccess && !result.source.agentAccess && memory.setAgentAccess(eventId, result.source.id, true)) {
           result.source.agentAccess = 1;
         }
         return sendJson(response, 200, result);

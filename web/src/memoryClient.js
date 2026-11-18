@@ -16,8 +16,8 @@ export async function memoryRequest(eventId, parameters, options) {
   return result;
 }
 
-export function importSource(eventId, file, agentAccess) {
-  return memoryRequest(eventId, { name: file.name, agent: agentAccess ? '1' : '0' }, {
+export function importSource(eventId, file, agentAccess, replacementId) {
+  return memoryRequest(eventId, { name: file.name, agent: agentAccess ? '1' : '0', ...(replacementId && { view: 'replace', source: replacementId }) }, {
     method: 'POST', headers: { 'Content-Type': 'application/octet-stream' }, body: file,
   });
 }

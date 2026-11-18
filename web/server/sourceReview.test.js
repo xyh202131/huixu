@@ -3,6 +3,7 @@ import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { test } from 'node:test';
+import { DatabaseSync } from 'node:sqlite';
 import { applyReviewFields, conflictEvidenceKey, currentReviewChoice, planFromReview, rebasePlanDraft, reviewChoices } from '../src/organizationSchema.js';
 import { organizeSources } from './organizeSources.js';
 import { createProjectMemory } from './projectMemory.js';
@@ -14,6 +15,32 @@ async function fixture(t) {
   t.after(async () => { memory.close(); await rm(directory, { recursive: true, force: true }); });
   return { memory, file };
 }
+
+test('历史原件可替换为新版本，迁移后保留原文引用与核对记录，普通导入继续去重', async t => {
+  const { memory, file } = await fixture(t);
+  const name = '会场.txt';
+  const old = Buffer.from('会场有八十个座位');
+  const first = (await memory.add('forum', name, old, true)).source;
+  const excerpt = memory.firstExcerpt('forum', first.id);
+  memory.reviewSource('forum', first.id, '已确认', '人工核实', 0);
+  memory.close();
+  const legacy = new DatabaseSync(file);
+  try {
+    legacy.exec('DROP INDEX memory_sources_hash; CREATE UNIQUE INDEX legacy_digest ON memory_sources(event_id, name, hash)');
+  } finally { legacy.close(); }
+  const second = (await memory.add('forum', name, Buffer.from('会场有六十个座位'), true, first.id)).source;
+  assert.equal((await memory.add('forum', name, old, true)).duplicate, true);
+  assert.deepEqual(memory.list('forum').filter(item => item.current).map(item => item.id), [second.id]);
+  assert.equal(memory.excerpt('forum', excerpt.chunkId).excerpt, '会场有八十个座位');
+  assert.equal(memory.list('forum').find(item => item.id === first.id).reviewNote, '人工核实');
+  await assert.rejects(memory.add('forum', name, old, true, first.id), { status: 409 });
+  const third = await memory.add('forum', name, old, true, second.id);
+  assert.equal(third.duplicate, false);
+  assert.equal(third.source.revision, 3);
+  assert.deepEqual(memory.search('forum', '座位', true).map(hit => hit.sourceId), [third.source.id]);
+  assert.equal((await memory.add('forum', name, old, true)).source.id, third.source.id);
+  assert.deepEqual(Buffer.from(memory.original('forum', second.id).original), Buffer.from('会场有六十个座位'));
+});
 
 test('资料状态独立保存，停用退出检索与提取，跨连接恢复有效', async t => {
   const { memory, file } = await fixture(t);

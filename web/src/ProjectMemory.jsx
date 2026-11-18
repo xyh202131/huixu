@@ -289,7 +289,7 @@ export function ProjectMemory({ eventId, mobile, importFiles, importRun, evidenc
       }
       setActionProblem('');
       setManaging(null);
-      importFiles(eventId, [new File([file], source.name, { type: file.type })], Boolean(source.agentAccess));
+      importFiles(eventId, [new File([file], source.name, { type: file.type })], Boolean(source.agentAccess), source.id);
     }} />
     {managing && <SourceEditor key={managing.id} eventId={eventId} source={managing} problem={actionProblem} updated={sourceUpdated}
       close={() => setManaging(null)} replace={source => { replacementSource.current = source; replacement.current.click(); }} />}

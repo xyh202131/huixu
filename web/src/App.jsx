@@ -275,7 +275,7 @@ function Workbench({ route, auth, useStoredEvents }) {
     return () => cancelAnimationFrame(frame);
   }, [route, event?.id, externalRoute, publicRoute]);
   useEffect(() => {
-    setAgentRun(conversation.current.get(event?.id)?.at(-1)?.run ?? null);
+    setAgentRun(conversation.current.get(event?.id)?.at(-1) ?? null);
     return () => agentRequest.current?.abort();
   }, [event?.id, publicRoute, externalRoute]);
 
@@ -401,8 +401,9 @@ function Workbench({ route, auth, useStoredEvents }) {
       evidence: { title: event.title, version: change.version }, reviewChangeId: change.id };
     const context = rememberTurn(event, change.title, { ...run, proposal: { kind: 'rescue', analysis } });
     context.selected = preferredIndex >= 0 ? preferredIndex + 1 : undefined;
-    const turns = (conversation.current.get(event.id) ?? []).filter(item => item.run.reviewChangeId !== change.id);
-    conversation.current.set(event.id, [...turns, { run, context }].slice(-4));
+    run.context = context;
+    const turns = (conversation.current.get(event.id) ?? []).filter(item => item.reviewChangeId !== change.id);
+    conversation.current.set(event.id, [...turns, run].slice(-4));
     setAgentRun(run);
   }
   async function releaseRescue(change, option) {
@@ -438,7 +439,7 @@ function Workbench({ route, auth, useStoredEvents }) {
       }
     }
   }
-  async function importFiles(eventId, files, agentAccess) {
+  async function importFiles(eventId, files, agentAccess, replacementId) {
     if (!files.length || importingEvents.current.has(eventId)) return;
     importingEvents.current.add(eventId);
     let progress = {
@@ -450,7 +451,7 @@ function Workbench({ route, auth, useStoredEvents }) {
       for (const [index, file] of files.entries()) {
         let result;
         let outcome;
-        try { result = await importSource(eventId, file, agentAccess); } catch (error) {
+        try { result = await importSource(eventId, file, agentAccess, replacementId); } catch (error) {
           outcome = { state: '导入失败', note: error.message, tone: 'rose' };
           progress = { ...progress, errors: [...progress.errors, { name: file.name, reason: error.message }] };
         }
@@ -542,7 +543,10 @@ function Workbench({ route, auth, useStoredEvents }) {
       const result = await askModel(question, event, request.signal, account?.id, previous.map(entry => entry.context));
       if (!request.signal.aborted) {
         const run = { ...result, eventId: event.id, question };
-        if (!result.error) conversation.current.set(event.id, [...previous, { run, context: rememberTurn(event, question, result) }].slice(-4));
+        if (!result.error) {
+          run.context = rememberTurn(event, question, result);
+          conversation.current.set(event.id, [...previous, run].slice(-4));
+        }
         setAgentRun(run);
       }
     } catch (error) {
@@ -550,6 +554,14 @@ function Workbench({ route, auth, useStoredEvents }) {
     } finally {
       if (agentRequest.current === request) agentRequest.current = null;
     }
+  }
+
+  function selectCandidate(number) {
+    const turns = conversation.current.get(event.id);
+    if (!agentRun?.context || turns?.at(-1) !== agentRun) return;
+    const run = { ...agentRun, context: { ...agentRun.context, selected: number } };
+    conversation.current.set(event.id, [...turns.slice(0, -1), run]);
+    setAgentRun(run);
   }
 
   function stopAgent() {
@@ -628,9 +640,9 @@ function Workbench({ route, auth, useStoredEvents }) {
             <ActivitySections key={event.id} {...props} />
           </main>
           <AgentWorkspace key={event.id} id={agentId} event={event} account={account} docked={dockAgent} open={agentOpen} close={closeAgent}
-            history={(conversation.current.get(event.id) ?? []).map(entry => entry.run).filter(turn => turn !== agentRun && turn.question !== agentRun?.question)}
+            history={(conversation.current.get(event.id) ?? []).filter(turn => turn !== agentRun && turn.question !== agentRun?.question)}
             clearHistory={() => { agentRequest.current?.abort(); conversation.current.delete(event.id); setAgentRun(null); }}
-            selectCandidate={number => { const entry = conversation.current.get(event.id)?.at(-1); if (entry) entry.context.selected = number; }}
+            selectCandidate={selectCandidate}
             run={agentRun?.eventId === event.id ? agentRun : null} ask={ask} stop={stopAgent} askLocal={askLocal}
             openSettings={() => showModal('settings')} reviewProposal={reviewProposal}
             openSource={chunkId => navigate(`sources/${chunkId}`)} openReviewedChange={id => navigate(id ? `change/released/${id}` : 'change')} />
