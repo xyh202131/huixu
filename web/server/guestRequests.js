@@ -49,8 +49,10 @@ export function guestRequestStore({ db, transaction, findEvent, now, bump, opera
   }
   function view(token) {
     const { event, session, request } = load(token);
+    const reply = operationsFor(event.id).replies.find(item => item.id === request.id);
     return { eventTitle: event.title, version: event.version, date: event.date, sessionTitle: session.title, room: session.room,
-      start: session.start, end: session.end, guest: request.guest, filename: request.filename, confirmedVersion: request.confirmedVersion };
+      start: session.start, end: session.end, availability: reply?.availability ?? null,
+      guest: request.guest, filename: request.filename, confirmedVersion: request.confirmedVersion };
   }
   function submit(token, input, bytes) {
     return transaction(() => {

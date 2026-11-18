@@ -144,6 +144,7 @@ test('重新校验保留有效的原选组合，失效时列出原方案和嘉�
   });
   const event = sampleForum();
   const owner = 'rescue-owner';
+  event.rooms.find(room => room.id === 'B').id = '备用厅';
   store.open(owner, signupSnapshot(event));
   const preview = preferredMoves => store.rescuePreview(owner, event.id, {
     revision: store.get(owner, event.id).revision, incident: closure, operations: rescueOperations(event), preferredMoves,
@@ -151,7 +152,7 @@ test('重新校验保留有效的原选组合，失效时列出原方案和嘉�
   const original = preview();
   const moves = original.analysis.plans[0].moves;
   const later = [
-    { sessionId: 'session-3', room: 'B', start: '13:55', end: '14:40' },
+    { sessionId: 'session-3', room: '备用厅', start: '13:55', end: '14:40' },
     { sessionId: 'session-4', room: 'C', start: '15:50', end: '16:30' },
   ];
   assert.ok(original.analysis.plans.every(plan => plan.moves[1].start !== later[1].start));

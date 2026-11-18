@@ -26,7 +26,7 @@ import { ownerRegistration, useRegistrationWorkspace } from './registrationClien
 import { rescueOperations, signupSnapshot } from './registrationRules';
 import { analyzeRescue, rescueSummary, rescueTitle, validateRescuePlan } from './rescueScheduling';
 import { Live, Review } from './LiveReview';
-import { activityTypes, externalRoles, initialEvents, loadEvents, makeMoveChange, minutes, newEvent, planFromText, publishChange, uid } from './model';
+import { activityTypes, externalRoles, initialEvents, loadEvents, makeMoveChange, manualPlan, minutes, newEvent, planFromText, publishChange, uid } from './model';
 
 const views = { overview: Overview, sources: Sources, schedule: Schedule, prep: Preparation, external: External,
   registration: Registration, materials: Materials, change: ChangePage, live: Live, review: Review };
@@ -91,9 +91,7 @@ function CreateEvent({ draft, events, create, close, ownerId }) {
       const capacity = hasNumber ? suggested.capacity : Number(form.get('capacity'));
       if (capacity < 1 || capacity > 100000) return;
       const next = newEvent({ title, type, capacity, date: form.get('date') });
-      if (!files.length) next.organizedPlan = { id: uid(), manual: true, topicPlan: true,
-        event: { title, date: next.date, target: String(capacity) }, agenda: [], tasks: [], roster: [], venues: [],
-        roles: [], supplies: [], budgetItems: [] };
+      if (!files.length) next.organizedPlan = manualPlan(next);
       create(next, files, form.get('agentAccess') === 'on');
     }}>
       <label>用一句话描述活动<textarea name="description" defaultValue={draft?.text?.slice(0, 200)} maxLength="200" placeholder="例如：我想办一场 150 人的论坛" /></label>

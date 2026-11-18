@@ -81,8 +81,8 @@ export function GuestConfirmation({ token }) {
     {data ? <Panel title={data.eventTitle}><p>{data.guest} · {data.sessionTitle} · v{data.version}</p>
       <p>{data.date} · {data.start}–{data.end} · {roomLabel(data.room)}</p>
       <form className="form-stack" onSubmit={submit}>
-        <label>可到场时间<input name="start" type="time" defaultValue={data.start} required /></label>
-        <label>最晚离场时间<input name="end" type="time" defaultValue={data.end} required /></label>
+        <label>可到场时间<input name="start" type="time" defaultValue={data.availability?.start ?? data.start} required /></label>
+        <label>最晚离场时间<input name="end" type="time" defaultValue={data.availability?.end ?? data.end} required /></label>
         <label>课件（PDF 或 PPTX，最多 16 MB）<input name="file" type="file" accept=".pdf,.pptx" /></label>
         {data.filename && <p>已收到《{data.filename}》</p>}
         <button className="button primary" disabled={busy}>{busy ? '正在提交…' : '确认时段并提交'}</button>

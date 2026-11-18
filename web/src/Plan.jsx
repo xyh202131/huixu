@@ -7,7 +7,7 @@ import { ActiveRescue, ReleasedRescue } from './RescueChange';
 import { rescueOperations, signupSnapshot } from './registrationRules';
 import { ProjectMemory } from './ProjectMemory';
 import { ImportReview, OrganizedPlan } from './ImportReview';
-import { checkCandidate, makeChange, money, moveCandidate, participantCount, roomLabel, timeRange } from './model';
+import { checkCandidate, makeChange, manualPlan, money, moveCandidate, participantCount, roomLabel, timeRange } from './model';
 import { changeReviewKey, describeChangeImpact } from './changeImpact';
 import { analyzeMove, checkinPoint, sameCandidate } from './scheduling';
 import { assessExecutionPlan } from './executionPlan';
@@ -141,6 +141,8 @@ export function Schedule({ event, readOnly, openChange, update, notify, navigate
       ? '编辑活动目标、环节和筹备事项，补齐方案里待确认的信息。'
       : readOnly ? '查看各会场的容量、设备和议程安排。' : '查看各会场的安排，编辑时间或拖动环节，发布前统一校验。'}>
       <Badge tone={event.version ? 'success' : 'neutral'}>{event.version ? '发布版本 v' + event.version : '计划草稿'}</Badge>
+      {!readOnly && !event.version && !event.organizedPlan && !agenda.length && <button className="button primary"
+        onClick={() => update(current => current.organizedPlan ? current : { ...current, organizedPlan: manualPlan(current) })}>手工编排方案</button>}
     </PageHead>
     {event.organizedPlan && <div className="activity-anchor" id="activity-organized-plan">
       <OrganizedPlan key={event.organizedPlan.id} event={event} plan={event.organizedPlan} update={update} notify={notify} navigate={navigate} />

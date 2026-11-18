@@ -22,6 +22,7 @@ export const shortText = (value, max = 160) => typeof value === 'string' ? value
 export const validId = value => typeof value === 'string' && /^[\w-]{1,100}$/.test(value);
 export const validEmail = value => /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(value) && value.length <= 254;
 const capacityValue = value => Number.isSafeInteger(value) && value >= 0 && value <= 100000;
+const validRoomName = value => typeof value === 'string' && value.length <= 100 && value.trim().length > 0;
 const linkLifetime = 7 * 24 * 60 * 60 * 1000;
 
 function snapshot(input) {
@@ -31,7 +32,7 @@ function snapshot(input) {
     throw new RegistrationError(400, '活动或名额信息无效。');
   }
   const rooms = input.rooms.map(room => {
-    if (!shortText(room?.id, 101) || room.id.length > 100 || !capacityValue(room.capacity)) throw new RegistrationError(400, '会场名称或容量无效。');
+    if (!validRoomName(room?.id) || !capacityValue(room.capacity)) throw new RegistrationError(400, '会场名称或容量无效。');
     return { id: room.id, capacity: room.capacity, ready: isClock(room.ready) ? room.ready : '00:00',
       equipment: Array.isArray(room.equipment) ? room.equipment.slice(0, 30).map(value => shortText(value, 80)).filter(Boolean) : [] };
   });
@@ -583,7 +584,7 @@ export function createRegistrationStore(root, override, now = Date.now) {
     let invalidatedSelection = null;
     if (input.preferredMoves !== undefined) {
       if (!Array.isArray(input.preferredMoves) || input.preferredMoves.length > 500 ||
-          input.preferredMoves.some(move => !validId(move?.sessionId) || !validId(move.room) || !isClock(move.start) || !isClock(move.end))) {
+          input.preferredMoves.some(move => !validId(move?.sessionId) || !validRoomName(move.room) || !isClock(move.start) || !isClock(move.end))) {
         throw new RegistrationError(400, '所选救场方案格式无效。');
       }
       const moves = input.preferredMoves.map(({ sessionId, room, start, end }) => ({ sessionId, room, start, end }));

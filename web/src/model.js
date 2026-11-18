@@ -39,6 +39,11 @@ export function newEvent({ title, type, date, capacity }, id = uid()) {
   };
 }
 
+export function manualPlan(event) {
+  return { id: uid(), manual: true, topicPlan: true, event: { title: event.title, date: event.date, target: String(event.capacity ?? '') },
+    agenda: [], tasks: [], roles: [], supplies: [], venues: [], roster: [], budgetItems: [] };
+}
+
 export function exampleEvent(details, id) {
   const event = newEvent(details, id);
   return {
