@@ -6,12 +6,41 @@ import { join } from 'node:path';
 import { test } from 'node:test';
 import { exampleEvent, participantCount } from '../src/model.js';
 import { signupSnapshot } from '../src/registrationRules.js';
-import { registrationOwnerApi, registrationPublicApi } from './registrationApi.js';
+import { guestUploadLimiter, registrationOwnerApi, registrationPublicApi } from './registrationApi.js';
 import { createRegistrationMail } from './registrationMail.js';
 import { createRegistrationStore } from './registrationStore.js';
 
 const owner = 'fixture-owner';
 const eventId = 'fixture-forum';
+
+test('嘉宾上传中断后下一份课件仍可提交', async () => {
+  const handle = registrationPublicApi({ guests: { view: () => ({}), submit: () => ({ saved: true }) } }, '');
+  const request = { url: '/guest', method: 'POST', socket: { remoteAddress: '127.0.0.1' },
+    headers: { host: 'localhost', 'x-huixu-confirmation': 'fixture', 'x-huixu-submission': '%7B%7D' } };
+  const response = { setHeader() {}, writeHead(status) { this.status = status; }, end() {} };
+  for (let index = 0; index < 4; index++) {
+    const cancelled = { ...request, async *iterator() { throw new Error('测试上传已取消'); } };
+    await handle(cancelled, response);
+    assert.equal(response.status, 500);
+  }
+  await handle({ ...request, async *iterator() { yield Buffer.from('sample'); } }, response);
+  assert.equal(response.status, 200);
+});
+
+test('嘉宾提交配额按链接、来源及同时在途的份数独立计算，到期恢复', () => {
+  let time = 0;
+  const reserve = guestUploadLimiter(() => time);
+  const active = Array.from({ length: 4 }, (_, i) => reserve('link-' + i, 'shared'));
+  assert.throws(() => reserve('other', 'elsewhere'), { status: 429 });
+  active.forEach(release => release());
+  for (let i = 0; i < 11; i++) reserve('link-0', 'shared')();
+  assert.throws(() => reserve('link-0', 'elsewhere'), { status: 429 });
+  for (let i = 15; i < 60; i++) reserve('another-' + i, 'shared')();
+  assert.throws(() => reserve('new', 'shared'), { status: 429 });
+  reserve('new', 'elsewhere')();
+  time += 60000;
+  reserve('link-0', 'shared')();
+});
 
 async function fixture(t) {
   const directory = await mkdtemp(join(tmpdir(), 'huixu-registration-test-'));

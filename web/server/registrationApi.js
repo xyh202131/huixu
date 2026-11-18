@@ -102,8 +102,34 @@ export function registrationOwnerApi(store, mail) {
   };
 }
 
+export function guestUploadLimiter(now = Date.now) {
+  const counters = new Map();
+  let active = 0;
+  return function reserve(token, address) {
+    if (active >= 4) throw new RegistrationError(429, '正在接收其他课件，请稍后重试。');
+    const time = now();
+    // 同一窗口内不续期，按插入顺序清理已到期的计数。
+    for (const [key, entry] of counters) {
+      if (time < entry.until) break;
+      counters.delete(key);
+    }
+    const keys = ['link:' + token, 'ip:' + address];
+    if ((counters.get(keys[0])?.count ?? 0) >= 12 || (counters.get(keys[1])?.count ?? 0) >= 60) {
+      throw new RegistrationError(429, '课件提交过于频繁，请稍后重试。');
+    }
+    for (const key of keys) {
+      const entry = counters.get(key) ?? { count: 0, until: time + 60000 };
+      entry.count += 1;
+      counters.set(key, entry);
+    }
+    active += 1;
+    return () => { active -= 1; };
+  };
+}
+
 export function registrationPublicApi(store, origin) {
   const attempts = new Map();
+  const reserveGuestUpload = guestUploadLimiter();
   return async (request, response) => {
     response.setHeader('Referrer-Policy', 'no-referrer');
     response.setHeader('X-Robots-Tag', 'noindex, nofollow');
@@ -125,12 +151,19 @@ export function registrationPublicApi(store, origin) {
       }
       if (section === 'guest') {
         store.guests.view(token);
-        let details;
-        try { details = JSON.parse(decodeURIComponent(request.headers['x-huixu-submission'])); } catch { throw new RegistrationError(400, '课件提交信息无效。'); }
-        if (!details || typeof details !== 'object') throw new RegistrationError(400, '课件提交信息无效。');
-        const bytes = await readBody(request, 16 * 1024 * 1024);
-        if (!bytes) throw new RegistrationError(413, '课件上限为 16 MB。');
-        return sendJson(response, 200, store.guests.submit(token, details, bytes));
+        const release = reserveGuestUpload(token, request.socket.remoteAddress);
+        try {
+          let details;
+          try { details = JSON.parse(decodeURIComponent(request.headers['x-huixu-submission'])); } catch { throw new RegistrationError(400, '课件提交信息无效。'); }
+          if (!details || typeof details !== 'object') throw new RegistrationError(400, '课件提交信息无效。');
+          const maxBytes = 16 * 1024 * 1024;
+          if (Number(request.headers['content-length']) > maxBytes) throw new RegistrationError(413, '课件上限为 16 MB。');
+          const bytes = await readBody(request, maxBytes);
+          if (!bytes) throw new RegistrationError(413, '课件上限为 16 MB。');
+          return sendJson(response, 200, store.guests.submit(token, details, bytes));
+        } finally {
+          release();
+        }
       }
       const input = await readJson(request, 4096);
       if (section === 'handoff') return sendJson(response, 200, store.taskHandoff(token, input));
