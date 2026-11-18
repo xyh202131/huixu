@@ -2,6 +2,7 @@ import { reservesSeat } from './registrationRules.js';
 import { checkCandidate, clock, isClock, minutes, moveCandidate, roomLabel, sameCandidate, sessionPeople, timeRange } from './scheduling.js';
 
 export const rescueKinds = { closure: '会场关闭', late: '嘉宾迟到', overrun: '环节超时' };
+export const rescueProofVersion = 2;
 
 export function rescueScope(event, input) {
   const { kind, at, until } = input ?? {};

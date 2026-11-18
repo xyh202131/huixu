@@ -1,4 +1,4 @@
-import { ArrowRight, ArrowRightLeft, CalendarDays, CalendarX2, CheckSquare, ChevronRight, Clock3, FileText, MapPin, Monitor, UploadCloud, UsersRound } from 'lucide-react';
+import { ArrowRight, ArrowRightLeft, CalendarDays, CheckSquare, ChevronRight, Clock3, FileText, FileWarning, MapPin, Monitor, UploadCloud, UsersRound } from 'lucide-react';
 import { Badge, Empty, IconTile, LinkButton, Panel } from './components';
 import { MetricValue } from './interactions';
 import { MarbleFlow } from './MarbleFlow';
@@ -10,13 +10,13 @@ export function Overview({ event, readOnly, navigate, openImport, openDraft, reg
   const completed = event.tasks.filter(task => task.done).length;
   const { sources, changes } = workItems(event);
   const sessions = event.agenda.toSorted((a, b) => a.start.localeCompare(b.start));
-  const { current, next } = liveAgenda(event, sessions);
+  const rooms = liveAgenda(event, sessions);
   let primary = ['查看议程', 'schedule'];
   if (topicDraft) primary = event.executionPlan ? ['继续排程', 'schedule/execution'] : ['编辑活动方案', 'schedule/plan'];
   else if (sources.length) primary = ['核对待确认资料', sources[0].route];
   if (event.onsite) primary = ['打开现场总控', 'live'];
   const agendaRows = event.onsite
-    ? [[current, '当前'], [next, '下一场']].filter(([item]) => item)
+    ? rooms.flatMap(({ current, next }) => [[current, '当前'], [next, '下一场']]).filter(([item]) => item)
     : sessions.slice(0, 4).map(item => [item, '']);
   const stats = [
     [UsersRound, 'success', '确认报名', participantCount(event) + ' / ' + (topicDraft && !event.capacity ? '待定' : event.capacity), '已确认报名人数 / 目标人数', 'registration'],
@@ -25,9 +25,9 @@ export function Overview({ event, readOnly, navigate, openImport, openDraft, reg
     [ArrowRightLeft, 'purple', '待发布变更', changes.length, '待评估并发布的变更', 'change'],
   ];
   const pending = [
-    ...sources.map(issue => [CalendarX2, 'rose', issue.title, '对照原文并确认采用的安排。', issue.route]),
+    ...sources.map(issue => [FileWarning, 'amber', issue.title, '对照原文并确认采用的安排。', issue.route]),
     ...changes.map(change => [ArrowRightLeft, 'blue', change.title, change.reason || '查看候选方案及发布影响。', 'change', change]),
-    ...(event.id === 'forum' && !event.replies.some(reply => reply.role === 'guest') ? [[FileText, 'blue', '嘉宾课件待提交', '查看嘉宾确认与课件提交情况。', 'external']] : []),
+    ...(event.isSample && event.type === '行业论坛' && !event.replies.some(reply => reply.role === 'guest') ? [[FileText, 'blue', '嘉宾课件待提交', '查看嘉宾确认与课件提交情况。', 'external']] : []),
   ];
   return <>
     <header className="overview-event">
@@ -35,7 +35,7 @@ export function Overview({ event, readOnly, navigate, openImport, openDraft, reg
       <div className="overview-event-copy">
         <div className="overview-event-status"><CalendarDays size={16} aria-hidden="true" /><span>{event.type}</span>
           {readOnly && event.isSample && <Badge tone="neutral">示例活动</Badge>}
-          <Badge tone="success">{event.onsite ? '进行中' : '筹备中'}</Badge></div>
+          <Badge tone={event.onsite ? 'success' : 'processing'} status>{event.onsite ? '进行中' : '筹备中'}</Badge></div>
         <h1>{event.title}</h1>
         <div className="overview-event-meta">
           <span><Clock3 size={16} aria-hidden="true" />{dateLabel(event.date)} · {agendaHours(sessions)}</span>

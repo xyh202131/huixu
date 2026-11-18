@@ -1,9 +1,22 @@
+import { modelPresets } from '../src/modelPresets.js';
+
+// 兼容已有 MiniMax 中国区配置使用的域名。
+const minimaxOrigins = new Set([new URL(modelPresets.minimax.baseUrl).origin, 'https://api.minimaxi.com', 'https://api.minimax.io']);
+const presetOrigins = new Set([...Object.values(modelPresets).map(preset => new URL(preset.baseUrl).origin), ...minimaxOrigins]);
+const inferenceOrigin = 'https://api-inference.modelscope.cn';
+
+function isHostedModelAllowed(url) {
+  const approved = process.env.HUIXU_MODEL_ORIGINS?.split(',').map(value => value.trim()) ?? [];
+  return url.protocol === 'https:' && (presetOrigins.has(url.origin) || url.origin === inferenceOrigin || approved.includes(url.origin));
+}
+
 export function modelEndpoint(protocol, baseUrl) {
   if (!['openai', 'anthropic'].includes(protocol)) return null;
   let url;
   try { url = new URL(baseUrl); } catch { return null; }
   const loopback = ['localhost', '127.0.0.1', '[::1]'].includes(url.hostname);
   if ((url.protocol !== 'https:' && !(loopback && url.protocol === 'http:')) || url.username || url.password || url.search || url.hash) return null;
+  if (process.env.HUIXU_HOSTED === '1' && !isHostedModelAllowed(url)) return null;
 
   const basePath = url.pathname.replace(/\/+$/, '');
   if (protocol === 'anthropic') {
@@ -19,11 +32,37 @@ export function readModelConfig(env) {
   const protocol = env.HUIXU_LLM_PROTOCOL || 'openai';
   const url = modelEndpoint(protocol, env.HUIXU_LLM_BASE_URL);
   if (!url || !env.HUIXU_LLM_MODEL) return null;
-  return { protocol, url, model: env.HUIXU_LLM_MODEL, key: env.HUIXU_LLM_API_KEY };
+  const nativeAnthropic = protocol === 'anthropic' && url.origin === new URL(modelPresets.anthropic.baseUrl).origin;
+  const keyHeader = env.HUIXU_LLM_KEY_HEADER || (nativeAnthropic ? 'x-api-key' : 'bearer');
+  if (!['bearer', 'x-api-key'].includes(keyHeader) || (protocol !== 'anthropic' && keyHeader !== 'bearer')) return null;
+  return { protocol, url, model: env.HUIXU_LLM_MODEL, key: env.HUIXU_LLM_API_KEY, keyHeader };
+}
+
+export function createPlatformModel(env, now = Date.now) {
+  const config = readModelConfig(env);
+  if (!config?.key || !minimaxOrigins.has(config.url.origin) || !/^MiniMax(?:[- ]|$)/i.test(config.model)) return null;
+  let until = 0;
+  let used = 0;
+  let active = 0;
+  return { ...config, async withQuota(send) {
+    if (active >= 4) return { error: '平台 MiniMax 正在处理其他请求，请稍后重试。' };
+    const time = now();
+    if (time >= until) {
+      until = time + 60000;
+      used = 0;
+    }
+    // 在模型请求层累计所有入口和多轮工具调用，共用同一份额度限制。
+    if (used >= 60) return { error: '平台 MiniMax 暂时达到调用频率上限，请稍后重试。' };
+    used += 1;
+    active += 1;
+    try { return await send(); } finally { active -= 1; }
+  } };
 }
 
 function modelError(status) {
   if (status === 401 || status === 403) return '模型服务拒绝鉴权，请检查会序的模型配置。';
+  if (status === 402) return '模型服务返回额度不足，请检查服务商账户余额或订阅。';
+  if (status === 404) return '模型服务未找到接口或模型，请核对地址、协议及模型名称。';
   if (status === 429) return '模型服务请求受限，请稍后重试。';
   return '模型服务未能处理请求，请检查模型名称与工具调用支持。';
 }
@@ -33,7 +72,12 @@ function parseArguments(value) {
   try { return JSON.parse(value); } catch { return null; }
 }
 
-export async function requestModel(config, { system, messages, tools, final, signal }) {
+export function requestModel(config, input) {
+  if (config.withQuota) return config.withQuota(() => callModel(config, input));
+  return callModel(config, input);
+}
+
+async function callModel(config, { system, messages, tools, final, signal }) {
   const anthropic = config.protocol === 'anthropic';
   const body = anthropic ? {
     model: config.model, system, messages, max_tokens: 4096,

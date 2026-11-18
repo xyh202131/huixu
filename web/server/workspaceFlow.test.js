@@ -11,14 +11,25 @@ import { adoptExecutionPlan, assessExecutionPlan } from '../src/executionPlan.js
 import { signupSnapshot } from '../src/registrationRules.js';
 import { checkCandidate } from '../src/scheduling.js';
 import { workspaceDraft, restoreWorkspaceDraft } from '../src/workspaceDraft.js';
-import { conversationContext } from '../src/agentConversation.js';
+import { conversationContext, executionChoice } from '../src/agentConversation.js';
 import { workItems, agendaHours } from '../src/workItems.js';
+import { preparationRooms, saveDraftRoom, taskDueDate } from '../src/prepRules.js';
 import { createRegistrationStore } from './registrationStore.js';
 import { createAgentHandler, confirmedForHits } from './agent.js';
 
 function topic() {
   return createTopicEvent({ topic: '秋季论坛', people: [], date: '', target: '150', venue: '', budget: '', audience: '' });
 }
+
+test('对话确认只接受完整、明确且带编号的发布指令', () => {
+  for (const question of ['就按第二个方案执行', '按第2个方案发布。', '请按照方案 ２ 执行！']) {
+    assert.equal(executionChoice(question), 2, question);
+  }
+  for (const question of ['第二个看起来不错', '按第二个方案执行？', '先别按第二个方案执行', '「就按第二个方案执行」',
+    '就按第二个方案执行，顺便发邮件', '就按第二个方案执行\n再给我看看', '执行第二个方案可行吗', '按方案 0 执行']) {
+    assert.equal(executionChoice(question), null, question);
+  }
+});
 
 test('只给主题后分派任务，重复采用保留执行身份与人工进度', () => {
   const event = topic();
@@ -31,14 +42,36 @@ test('只给主题后分派任务，重复采用保留执行身份与人工进�
   assert.ok(assessExecutionPlan(active).issues.length > 0);
   active.tasks[0].owner = '测试统筹';
   active.tasks[0].done = true;
+  active.tasks[0].dueDate = '2027-01-08';
+  active.tasks[0].offset = null;
   plan.agenda[0].duration = '60';
   active = adoptExecutionPlan(active, plan);
   assert.equal(active.executionPlan.agenda[0].id, id);
   assert.equal(active.executionPlan.agenda[0].duration, '60');
   assert.equal(active.tasks[0].owner, '测试统筹');
   assert.equal(active.tasks[0].done, true);
+  assert.equal(taskDueDate(active.tasks[0], '2027-01-01'), '2027-01-08');
+  plan.tasks[0].offset = '3';
+  active = adoptExecutionPlan(active, plan);
+  assert.equal(taskDueDate(active.tasks[0], '2027-01-01'), '2026-12-29');
   const manual = newEvent({ title: '手工论坛', type: '行业论坛', date: '', capacity: 30 });
   assert.deepEqual([manual.rooms, manual.agenda, manual.tasks], [[], [], []]);
+});
+
+test('准备阶段编辑待排程会场时同步草稿引用，重新采用保留核对后的配置', () => {
+  const event = topic();
+  const plan = event.organizedPlan;
+  plan.venues = [{ id: 'room-1', name: 'A 厅', capacity: '150', equipment: '投影' }];
+  plan.agenda[0].room = 'A 厅';
+  const adopted = adoptExecutionPlan(event, plan);
+  assert.equal(preparationRooms(adopted)[0].id, 'A');
+  const room = { id: '北侧报告厅', capacity: 120, ready: '09:00', equipment: ['投影', '音响'] };
+  const edited = saveDraftRoom(adopted, 'A', room);
+  assert.equal(edited.executionPlan.agenda[0].room, room.id);
+  assert.equal(edited.organizedPlan.agenda[0].room, room.id);
+  assert.equal(edited.organizedPlan.venues[0].id, 'room-1');
+  assert.deepEqual(preparationRooms(adoptExecutionPlan(edited, edited.organizedPlan)), [room]);
+  assert.equal(adopted.organizedPlan.venues[0].name, 'A 厅');
 });
 
 test('导入场次日期、容量、冲突与真实时段，概览统计保留所有变更', () => {

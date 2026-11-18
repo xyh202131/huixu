@@ -1,5 +1,6 @@
 import { cloneElement, useEffect, useId, useLayoutEffect, useRef, useState } from 'react';
-import { AlertCircle, CheckCircle2, Info, X } from 'lucide-react';
+import { CircleCheck, CircleX, Info, TriangleAlert, X } from 'lucide-react';
+import { IconButton } from './components';
 
 export const mobileLayoutQuery = '(max-width: 760px), (max-width: 1023px) and (pointer: coarse)';
 
@@ -88,9 +89,10 @@ export function Dialog({ title, close, variant = 'modal', className = '', fullOn
       if (variant !== 'modal' && event.target === event.currentTarget) close();
     }}>
     <header className="dialog-head"><h2 id={titleId}>{title}</h2>
-      <button ref={closeButton} type="button" className="icon-button" aria-label={variant === 'navigation' ? '关闭菜单' : '关闭'} onClick={close}>
-        {variant === 'navigation' ? <MenuIcon /> : <X size={20} aria-hidden="true" />}
-      </button>
+      <IconButton ref={closeButton} label={variant === 'navigation' ? '关闭菜单' : '关闭'}
+        icon={variant === 'navigation' ? undefined : X} variant="ghost" onClick={close}>
+        {variant === 'navigation' && <MenuIcon />}
+      </IconButton>
     </header>
     <div className="dialog-body">{children}</div>
     {footer && <footer className="dialog-footer actions">{footer}</footer>}
@@ -164,7 +166,7 @@ export function Popconfirm({ label, description, confirmLabel, onConfirm, classN
           cancel.current.focus({ preventScroll: true });
         });
       }} onToggle={event => setOpen(event.newState === 'open')}>
-      <p><AlertCircle size={17} aria-hidden="true" />{description}</p>
+      <p><TriangleAlert size={17} aria-hidden="true" />{description}</p>
       <div className="actions compact">
         <button ref={cancel} type="button" className="button small" popoverTarget={id} popoverTargetAction="hide">取消</button>
         <button type="button" className="button small primary" onClick={() => { popover.current.hidePopover(); onConfirm(); }}>{confirmLabel}</button>
@@ -173,10 +175,12 @@ export function Popconfirm({ label, description, confirmLabel, onConfirm, classN
   </>;
 }
 
+const feedbackIcons = { info: Info, success: CircleCheck, warning: TriangleAlert, error: CircleX };
+
 export function Notice({ tone = 'info', announce = false, children }) {
-  const Icon = tone === 'success' ? CheckCircle2 : tone === 'info' ? Info : AlertCircle;
+  const Icon = feedbackIcons[tone] ?? Info;
   const role = announce ? (tone === 'error' ? 'alert' : 'status') : undefined;
-  return <div className={'notice ' + tone} role={role}><Icon size={19} aria-hidden="true" /><div>{children}</div></div>;
+  return <div className={'notice ' + tone} role={role}><Icon size={18} aria-hidden="true" /><div>{children}</div></div>;
 }
 
 export function Toast({ feedback, dismiss }) {
@@ -191,8 +195,8 @@ export function Toast({ feedback, dismiss }) {
     <div className="sr-only" role="status" aria-live="polite" aria-atomic="true">{feedback && <span key={feedback.id}>{feedback.text}</span>}</div>
     {feedback && <div className="toast" onMouseEnter={() => setPaused(true)} onMouseLeave={() => setPaused(false)}
       onFocus={() => setPaused(true)} onBlur={event => { if (!event.currentTarget.contains(event.relatedTarget)) setPaused(false); }}>
-      <CheckCircle2 size={20} aria-hidden="true" /><span>{feedback.text}</span>
-      <button className="icon-button" type="button" aria-label="关闭提示" onClick={() => { setPaused(false); dismiss(); }}><X size={17} aria-hidden="true" /></button>
+      <Info size={18} aria-hidden="true" /><span>{feedback.text}</span>
+      <IconButton label="关闭提示" icon={X} variant="ghost" onClick={() => { setPaused(false); dismiss(); }} />
     </div>}
   </>;
 }

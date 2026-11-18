@@ -106,15 +106,22 @@ test('救场只产生一个发布版本，发布阻止过期预览并保持报�
   });
   const request = result => ({
     changeId: 'rescue-closure-1', revision: result.state.revision, incident: result.analysis.incident,
-    moves: result.analysis.plans[0].moves, proof: result.analysis.plans[0].proof,
+    moves: result.analysis.plans[0].moves, proof: result.analysis.plans[0].proof, operations: rescueOperations(event),
   });
+  const beforePreview = store.get(owner, event.id);
+  assert.throws(() => store.rescuePreview(owner, event.id, { revision: beforePreview.revision,
+    incident: { kind: 'unknown' }, operations: rescueOperations(event) }), { status: 400 });
+  assert.deepEqual(store.get(owner, event.id), beforePreview);
   const stale = request(preview());
+  assert.deepEqual(store.get(owner, event.id), beforePreview);
   const person = store.get(owner, event.id).people.find(person => person.id === 'G001');
   store.savePerson(owner, event.id, person.id, { ...person, note: '测试并发更新' });
   assert.throws(() => store.publishRescue(owner, event.id, stale), /重新计算/);
   const publish = request(preview());
   const tampered = { ...publish, moves: publish.moves.map(move => ({ ...move, room: 'A' })) };
   assert.throws(() => store.publishRescue(owner, event.id, tampered), /预览不一致/);
+  assert.throws(() => store.publishRescue(owner, event.id, { ...publish, operations: { ...publish.operations, replies: [] } }), /预览不一致/);
+  assert.deepEqual(store.get(owner, event.id).operations, beforePreview.operations);
   const result = store.publishRescue(owner, event.id, publish);
   assert.equal(result.event.version, 2);
   assert.equal(store.publishRescue(owner, event.id, publish).event.version, 2);
@@ -129,6 +136,58 @@ test('救场只产生一个发布版本，发布阻止过期预览并保持报�
   assert.equal(publicly.agenda[2].guest, undefined);
   assert.match(materialText({ ...result.event, ...result.operations }, '工作人员台本'), /B 厅门口签到[\s\S]*C 厅门口签到/);
   assert.match(materialText({ ...result.event, ...result.operations }, '岗位清单'), /C 厅.*\n签到 · 待分配\n分场引导 · 演练引导员/);
+});
+
+test('单环节对话确认绑定同一个候选，通知草稿与议程一并保存', async t => {
+  const directory = await mkdtemp(join(tmpdir(), 'huixu-chat-move-'));
+  const file = join(directory, 'move.sqlite');
+  let store = createRegistrationStore(process.cwd(), file);
+  t.after(async () => {
+    store.close();
+    for (const path of [file, file + '-shm', file + '-wal']) {
+      await unlink(path).catch(error => { if (error.code !== 'ENOENT') throw error; });
+    }
+    await rmdir(directory);
+  });
+  const event = sampleForum();
+  const owner = 'chat-owner';
+  const opened = store.open(owner, signupSnapshot(event));
+  const shared = store.changeEvent(owner, event.id, { revision: opened.revision, shared: true, formOpen: true });
+  const operations = rescueOperations(event);
+  const move = { changeId: 'chat-move-1', sessionId: 'session-4', room: 'B', start: '14:00', closedRoom: 'A' };
+  function preview(revision) {
+    const result = store.movePreview(owner, event.id, { ...move, revision, operations });
+    assert.ok(result.analysis.requested.issues.some(issue => issue.includes('容量')));
+    const second = result.analysis.alternatives[0];
+    assert.equal(second.candidate.room, 'C');
+    assert.match(second.impact.rows[0].impact.checkin.after, /C 厅/);
+    assert.equal(second.impact.notices.find(notice => notice.role === '观众').recipients.length, 72);
+    return { revision, operations, move: { ...move, candidate: second.candidate, proof: second.proof } };
+  }
+  const stale = preview(shared.revision);
+  assert.deepEqual(store.get(owner, event.id), shared);
+  const person = shared.people.find(item => item.id === 'G001');
+  const updated = store.savePerson(owner, event.id, person.id, { ...person, note: '演练更新' });
+  assert.throws(() => store.changeEvent(owner, event.id, stale, true), { status: 409 });
+  const input = preview(updated.revision);
+  assert.throws(() => store.changeEvent('other-user', event.id, input, true), { status: 404 });
+  assert.throws(() => store.changeEvent(owner, event.id, {
+    ...input, move: { ...input.move, candidate: { ...input.move.candidate, room: 'A' } },
+  }, true), /预览不一致/);
+  assert.throws(() => store.changeEvent(owner, event.id, {
+    ...input, operations: { ...operations, replies: [] },
+  }, true), /预览不一致/);
+  assert.equal(store.get(owner, event.id).event.version, 1);
+  const released = store.changeEvent(owner, event.id, input, true);
+  assert.equal(released.event.version, 2);
+  assert.equal(store.changeEvent(owner, event.id, input, true).revision, released.revision);
+  assert.equal(released.moveReleases.length, 1);
+  assert.deepEqual(released.people, updated.people);
+  assert.match(materialText({ ...released.event, ...released.operations }, '工作人员台本'), /C 厅门口签到/);
+  store.close();
+  store = createRegistrationStore(process.cwd(), file);
+  assert.deepEqual(store.get(owner, event.id).moveReleases, released.moveReleases);
+  assert.equal(store.publicEvent(shared.publicId).agenda.find(item => item.id === 'session-4').room, 'C');
 });
 
 test('重新校验保留有效的原选组合，失效时列出原方案和嘉宾冲突', async t => {

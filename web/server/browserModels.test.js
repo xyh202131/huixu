@@ -24,6 +24,24 @@ test('浏览器配置仅在同一服务商、协议和接口复用密钥', () =>
   assert.throws(() => modelInput({ provider: 'openai', model: '', baseUrl: '', apiKey: '' }), /API Key/);
 });
 
+test('模型使用该入口未提供的工具时结束本轮对话', async t => {
+  let calls = 0;
+  const provider = await listen(t, async (request, response) => {
+    await readBody(request, 128 * 1024);
+    calls += 1;
+    sendJson(response, 200, { choices: [{ message: { tool_calls: [{ id: 'fixture', type: 'function',
+      function: { name: 'list_project_sources', arguments: '{}' } }] } }] });
+  });
+  const origin = await listen(t, createAgentHandler(() => null, null));
+  const connection = { provider: 'custom', protocol: 'openai', baseUrl: provider + '/v1', model: 'tool-test' };
+  const response = await fetch(origin, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({
+    connection, question: '查看资料目录', event: { id: 'forum', title: '访客论坛', version: 1, agenda: [], rooms: [] },
+  }) });
+  assert.equal(response.status, 502);
+  assert.match((await response.json()).error, /未提供的工具/);
+  assert.equal(calls, 1);
+});
+
 test('访客自带模型完成工具测试和对话，每次请求独立且无法读取私有资料', async t => {
   const received = [];
   const provider = await listen(t, async (request, response) => {
@@ -47,6 +65,13 @@ test('访客自带模型完成工具测试和对话，每次请求独立且无�
   const event = { id: 'forum', title: '访客论坛', version: 1, agenda: [], rooms: [] };
   for (const protocol of ['openai', 'anthropic']) {
     const connection = { provider: 'custom', protocol, baseUrl: provider + '/v1', model: protocol + '-fixture', keyHeader: 'x-api-key', apiKey: 'fixture-browser-key' };
+    const calls = received.length;
+    const valid = await request('/test', { purpose: 'chat', connection, validateOnly: true });
+    assert.equal(valid.status, 200);
+    assert.deepEqual(await valid.json(), { valid: true });
+    const rejectedSave = await request('/test', { purpose: 'chat', connection: { ...connection, baseUrl: 'http://example.test/v1' }, validateOnly: true });
+    assert.equal(rejectedSave.status, 400);
+    assert.equal(received.length, calls);
     const tested = await request('/test', { purpose: 'chat', connection });
     assert.equal(tested.status, 200);
     assert.equal((await tested.json()).connected, true);

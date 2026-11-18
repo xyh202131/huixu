@@ -9,6 +9,8 @@ const parser = fileURLToPath(new URL('./extractSource.py', import.meta.url));
 const textFormats = new Set(['.md', '.txt', '.json']);
 const maxChunkChars = 1200;
 const maxChunks = 2500;
+const maxConcurrentParsers = 4;
+let activeParsers = 0;
 
 function plainSections(buffer) {
   const text = new TextDecoder('utf-8', { fatal: true }).decode(buffer);
@@ -43,6 +45,10 @@ function plainSections(buffer) {
 }
 
 function pythonExtract(buffer, name, mode) {
+  if (activeParsers >= maxConcurrentParsers) {
+    return Promise.reject(Object.assign(new Error('资料解析繁忙，请稍后再试。'), { status: 429 }));
+  }
+  activeParsers += 1;
   return new Promise(resolve => {
     const args = mode ? [parser, name, sourceAccept, mode] : [parser, name, sourceAccept];
     const child = spawn(process.env.HUIXU_MEMORY_PYTHON || 'python', args, {
@@ -71,7 +77,7 @@ function pythonExtract(buffer, name, mode) {
       try { resolve(JSON.parse(output)); } catch { resolve({ error: '本机解析器返回异常' }); }
     });
     child.stdin.end(buffer);
-  });
+  }).finally(() => { activeParsers -= 1; });
 }
 
 export function parseSpreadsheet(name, buffer) {

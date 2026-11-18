@@ -3,12 +3,12 @@ import { Calendar, Plus, Settings, Sparkles } from 'lucide-react';
 import { AgentWorkspace } from './AgentWorkspace';
 import { AccountAvatar, AccountDialog, useWorkbenchSession } from './Auth';
 import { ActivityDirectory, chapterFor, chapters, jumpToActivity } from './ActivityNavigation';
-import { Dialog, mobileLayoutQuery, Toast, Tooltip } from './interactions';
-import { Tabs } from './components';
+import { Dialog, mobileLayoutQuery, Notice, Toast, Tooltip } from './interactions';
+import { IconButton, Tabs } from './components';
 import { TopicPlanForm } from './TopicPlanForm';
 import { Select } from './Select';
 import { askModel } from './agentClient';
-import { rememberTurn } from './agentConversation';
+import { executionChoice, rememberTurn, summarizeExecutionImpact, workspaceHistoryLimit } from './agentConversation';
 import { describeRescueImpact } from './changeImpact';
 import { importSource, organizationRequest, sourceAccept } from './memoryClient';
 import { Overview } from './Overview';
@@ -17,7 +17,8 @@ import { WorkspaceDraftDialog } from './WorkspaceDraftDialog';
 import { TeamBoard } from './TeamBoard';
 import { draftChanged, restoreWorkspaceDraft } from './workspaceDraft';
 import { ChangePage, Schedule, Sources } from './Plan';
-import { External, ExternalForm, Preparation } from './PrepExternal';
+import { External, ExternalForm } from './PrepExternal';
+import { Preparation } from './Preparation';
 import { GuestConfirmation } from './GuestCollaboration';
 import { TaskHandoff } from './TaskHandoff';
 import { Materials, PublicEvent, Registration } from './Attendees';
@@ -26,7 +27,8 @@ import { ownerRegistration, useRegistrationWorkspace } from './registrationClien
 import { rescueOperations, signupSnapshot } from './registrationRules';
 import { analyzeRescue, rescueSummary, rescueTitle, validateRescuePlan } from './rescueScheduling';
 import { Live, Review } from './LiveReview';
-import { activityTypes, externalRoles, initialEvents, loadEvents, makeMoveChange, manualPlan, minutes, newEvent, planFromText, publishChange, uid } from './model';
+import { activityTypes, externalRoles, makeMoveChange, manualPlan, minutes, newEvent, planFromText, publishChange, uid } from './model';
+import { useWorkspace } from './useWorkspace';
 
 const views = { overview: Overview, sources: Sources, schedule: Schedule, prep: Preparation, external: External,
   registration: Registration, materials: Materials, change: ChangePage, live: Live, review: Review };
@@ -126,19 +128,74 @@ function WorkspaceApp({ route }) {
   const [path, eventId, role] = route;
   const guestLink = Boolean(eventId) && path === 'external' && Object.hasOwn(externalRoles, role);
   const account = auth.session.user;
-  return <Workbench key={account?.id ?? (guestLink ? 'guest-link' : 'preview')} route={route} auth={auth}
-    useStoredEvents={Boolean(account || guestLink)} />;
+  return <AccountWorkspace key={account?.id ?? (guestLink ? 'guest-link' : 'preview')} route={route} auth={auth} guestLink={guestLink} />;
 }
 
-function Workbench({ route, auth, useStoredEvents }) {
+function AccountWorkspace({ route, auth, guestLink }) {
+  const workspace = useWorkspace(auth.session.user);
+  if (workspace.data) return <Workbench {...{ route, auth, guestLink, workspace }} />;
+  return <main className="unavailable-link">
+    <h1>工作区</h1>
+    {workspace.status.phase === 'loadError' ? <>
+      <Notice tone="error" announce>{workspace.status.message}</Notice>
+      <div className="actions"><button type="button" className="button primary" onClick={workspace.retryLoad}>重新读取</button>
+        <button type="button" className="button" onClick={() => void auth.signOut().catch(auth.refresh)}>退出登录</button></div>
+    </> : <p role="status" className="muted">正在加载账号的活动与历史记录…</p>}
+  </main>;
+}
+
+function WorkspaceSync({ workspace }) {
+  const [confirmReload, setConfirmReload] = useState(false);
+  const { phase, message } = workspace.status;
+  if (phase === 'saving' || phase === 'saved') return <p className="workspace-sync-status muted" role="status">
+    {phase === 'saved' ? '工作区已同步' : '正在同步工作区…'}</p>;
+  if (phase === 'conflict') return <div className="workspace-sync-status">
+    <Notice tone="warning" announce>其他窗口或设备保存了更新。本页修改待同步，可以先导出副本。</Notice>
+    <div className="actions compact">
+      <button type="button" className="button small" onClick={workspace.exportPending}>导出待同步修改</button>
+      <button type="button" className="button small" onClick={() => setConfirmReload(true)}>读取服务端版本</button>
+    </div>
+    {confirmReload && <Dialog title="读取服务端的工作区" close={() => setConfirmReload(false)}>
+      <p>读取后会丢弃当前页面待同步的修改。可以先导出副本。</p>
+      <div className="actions"><button type="button" className="button" onClick={() => setConfirmReload(false)}>取消</button>
+        <button type="button" className="button primary" onClick={workspace.discardPending}>确认读取</button></div>
+    </Dialog>}
+  </div>;
+  if (phase !== 'error') return null;
+  return <div className="workspace-sync-status">
+    <Notice tone="error" announce>{message}</Notice>
+    <div className="actions compact">
+      <button type="button" className="button small" onClick={() => void workspace.flush().catch(() => {})}>重试同步</button>
+      <button type="button" className="button small" onClick={workspace.exportPending}>导出待同步修改</button>
+    </div>
+  </div>;
+}
+
+function Workbench({ route, auth, guestLink, workspace }) {
   const account = auth.session.user;
-  const readOnly = !useStoredEvents;
-  const [events, setEvents] = useState(() => useStoredEvents ? loadEvents() : initialEvents());
-  const [activeId, setActiveId] = useState(() => useStoredEvents ? sessionStorage.getItem('huixu.active') ?? 'forum' : 'forum');
+  const readOnly = !account && !guestLink;
+  const { events, activeId, conversations } = workspace.data;
+  const setData = workspace.setData;
+  const setEvents = useCallback(update => setData(current => {
+    if (!current) return current;
+    const next = update(current.events);
+    return next === current.events ? current : { ...current, events: next };
+  }), [setData]);
+  const conversation = new Map(conversations);
+  function saveConversation(eventId, update) {
+    setData(current => {
+      if (!current) return current;
+      const next = new Map(current.conversations);
+      const turns = update(next.get(eventId) ?? []);
+      if (turns.length) next.set(eventId, turns.slice(-workspaceHistoryLimit));
+      else next.delete(eventId);
+      return { ...current, conversations: [...next] };
+    });
+  }
   const [modal, setModal] = useState('');
   const [draft, setDraft] = useState(null);
   const [agentRun, setAgentRun] = useState(null);
-  const conversation = useRef(new Map());
+  const [agentModel, setAgentModel] = useState('auto');
   const [agentDockOpen, setAgentDockOpen] = useState(true);
   const [agentDrawerOpen, setAgentDrawerOpen] = useState(false);
   const directoryId = useId();
@@ -152,6 +209,7 @@ function Workbench({ route, auth, useStoredEvents }) {
   const [organizationRuns, setOrganizationRuns] = useState({});
   const organizationRequests = useRef({});
   const agentRequest = useRef(null);
+  const agentExecution = useRef(null);
   const importingEvents = useRef(new Set());
   const [toast, setToast] = useState(null);
   const toastId = useRef(0);
@@ -164,13 +222,14 @@ function Workbench({ route, auth, useStoredEvents }) {
   const externalRoute = path === 'external' && Boolean(routeEventId);
   const publicRoute = path === 'preview-event' && Boolean(routeEventId);
   const localEvent = events.find(item => item.id === (externalRoute || publicRoute ? routeEventId : activeId)) ?? events[0];
-  const registration = useRegistrationWorkspace(Boolean(account), localEvent);
+  const registration = useRegistrationWorkspace(account?.id, localEvent);
   const shared = registration.current;
   let event = account ? { ...localEvent, checkins: shared?.checkins ?? [] } : localEvent;
   if (shared) {
     event = { ...event, attendees: shared.people, formOpen: shared.event.formOpen };
     const received = new Set((shared.guestRequests ?? []).filter(item => item.taskId && item.filename).map(item => item.taskId));
-    if (received.size) event.tasks = event.tasks.map(task => received.has(String(task.id)) ? { ...task, done: true } : task);
+    if (received.size) event.tasks = event.tasks.map(task =>
+      received.has(String(task.id)) && !task.reopenedAfterUpload ? { ...task, done: true } : task);
     if (shared.operations) {
       const actual = { ...localEvent.actual, ...shared.operations.actual };
       const replies = new Map(shared.operations.replies.map(reply => [reply.id, reply]));
@@ -184,12 +243,13 @@ function Workbench({ route, auth, useStoredEvents }) {
         ...localEvent.agenda.find(item => item.id === session.id), ...session,
       })) };
     }
-    const releases = shared.rescueReleases ?? [];
+    const releases = [...(shared.rescueReleases ?? []), ...(shared.moveReleases ?? [])].sort((a, b) => b.version - a.version);
     if (releases.length) {
       const ids = new Set(releases.map(item => item.id));
       const history = [...releases, ...localEvent.history.filter(item => !ids.has(item.id))].sort((a, b) => b.version - a.version);
       const messages = releases.flatMap(release => release.notices.map((notice, index) => ({
-        id: release.id + '-' + index, channel: '救场通知草稿', subject: release.title + ' · ' + notice.role, body: notice.body,
+        id: release.id + '-' + index, channel: release.kind === 'rescue' ? '救场通知草稿' : '议程变更通知草稿',
+        subject: release.title + ' · ' + notice.role, body: notice.body,
         count: notice.recipients.length, version: release.version, date: release.date,
       })));
       event = { ...event, history, messages: [...messages, ...event.messages], change: ids.has(event.change?.id) ? null : event.change,
@@ -202,34 +262,22 @@ function Workbench({ route, auth, useStoredEvents }) {
 
   useEffect(() => {
     const remote = shared?.workspaceRevision ?? 0;
-    if (!account || localEvent.draftRevision == null || localEvent.draftDirty || remote <= localEvent.draftRevision) return;
+    const baseline = localEvent.draftRevision ?? 0;
+    if (!account || localEvent.draftDirty || (!baseline && localEvent.organizedPlan) || remote <= baseline) return;
     const request = new AbortController();
-    ownerRegistration('/' + localEvent.id + '/draft', 'GET', undefined, request.signal).then(saved => {
+    ownerRegistration('/' + localEvent.id + '/draft', 'GET', undefined, request.signal, account.id).then(saved => {
       if (request.signal.aborted || !saved.data) return;
-      setEvents(list => list.map(item => item.id === localEvent.id && !item.draftDirty && saved.revision > item.draftRevision
+      setEvents(list => list.map(item => item.id === localEvent.id && !item.draftDirty &&
+        (item.draftRevision || !item.organizedPlan) && saved.revision > (item.draftRevision ?? 0)
         ? restoreWorkspaceDraft(item, saved) : item));
     }).catch(error => { if (!request.signal.aborted) notify(error.message); });
     return () => request.abort();
-  }, [account?.id, shared?.workspaceRevision, localEvent.id, localEvent.draftRevision, localEvent.draftDirty]);
+  }, [account?.id, shared?.workspaceRevision, localEvent.id, localEvent.draftRevision, localEvent.draftDirty, Boolean(localEvent.organizedPlan)]);
 
-  useEffect(() => {
-    if (!useStoredEvents) return;
-    try {
-      localStorage.setItem('huixu.events.2', JSON.stringify(events));
-    } catch {
-      // 存储被禁用时，当前标签页仍可操作。
-    }
-  }, [useStoredEvents, events]);
-  useEffect(() => {
-    if (!useStoredEvents) return;
-    const sync = e => { if (e.key === 'huixu.events.2') setEvents(loadEvents()); };
-    window.addEventListener('storage', sync);
-    return () => window.removeEventListener('storage', sync);
-  }, [useStoredEvents]);
   useEffect(() => {
     if (!account) return;
     const controller = new AbortController();
-    ownerRegistration('', 'GET', undefined, controller.signal).then(({ events: saved }) => {
+    ownerRegistration('', 'GET', undefined, controller.signal, account.id).then(({ events: saved }) => {
       if (controller.signal.aborted) return;
       setEvents(current => {
         const loaded = saved.filter(item => !current.some(local => local.id === item.id));
@@ -272,13 +320,13 @@ function Workbench({ route, auth, useStoredEvents }) {
     }
     if (jump?.preserveScroll) return;
     const frame = requestAnimationFrame(() => {
-      if (publicRoute || externalRoute || !path) window.scrollTo(0, 0);
+      if (publicRoute || externalRoute || !path || (path === 'overview' && !jump)) window.scrollTo(0, 0);
       else jumpToActivity(route, Boolean(jump));
     });
     return () => cancelAnimationFrame(frame);
   }, [route, event?.id, externalRoute, publicRoute]);
   useEffect(() => {
-    setAgentRun(conversation.current.get(event?.id)?.at(-1) ?? null);
+    setAgentRun(conversation.get(event?.id)?.at(-1) ?? null);
     return () => agentRequest.current?.abort();
   }, [event?.id, publicRoute, externalRoute]);
 
@@ -336,8 +384,7 @@ function Workbench({ route, auth, useStoredEvents }) {
     });
   }
   function select(id, destination = 'overview') {
-    setActiveId(id);
-    if (useStoredEvents) sessionStorage.setItem('huixu.active', id);
+    setData(current => current.activeId === id ? current : { ...current, activeId: id });
     navigate(destination);
   }
   function update(transform, { syncing = false } = {}) {
@@ -362,7 +409,11 @@ function Workbench({ route, auth, useStoredEvents }) {
       draftChanges: [...(current.change ? [current.change] : []), ...(current.draftChanges ?? []).filter(item => item.id !== change.id)],
     }));
   }
-  async function publish(candidate, recordMessage, reviewed) {
+  async function publish(candidate, recordMessage, reviewed, confirmation) {
+    if (confirmation) return registration.change('/schedule', 'PATCH', {
+      revision: confirmation.revision, operations: rescueOperations(event),
+      move: { ...confirmation.move, changeId: confirmation.id, candidate, proof: reviewed },
+    });
     const next = publishChange(event, candidate, recordMessage, reviewed);
     if (!account || !shared || next === event) return false;
     await registration.change('/schedule', 'PATCH', { revision: shared.revision, event: signupSnapshot(next) });
@@ -389,15 +440,8 @@ function Workbench({ route, auth, useStoredEvents }) {
         preferredIndex: issues.length ? -1 : preferredIndex, invalidatedSelection: issues.length ? { moves: preferred.moves, issues } : null });
       return;
     }
-    if (!account || !shared) throw new Error('活动服务正在读取议程，请稍后重试。');
-    const operations = rescueOperations(event);
-    const result = await registration.change('/rescue/preview', 'POST', {
-      revision: shared.revision, incident, operations, preferredMoves: preferred?.moves,
-    });
-    const { analysis, state, preferredIndex, invalidatedSelection } = result;
-    const change = { id: previous?.id ?? uid(), kind: 'rescue', title: rescueTitle(analysis.incident),
-      reason: rescueSummary(analysis), analysis, revision: state.revision, version: state.event.version,
-      operationsKey: JSON.stringify(operations), preferredIndex, invalidatedSelection };
+    const change = await rescueChange(incident, previous, preferred);
+    const { analysis, preferredIndex } = change;
     if (previous) update(current => current.change?.id === previous.id ? { ...current, change } : current);
     else openChange(change);
     const run = { eventId: event.id, question: change.title, answer: change.reason,
@@ -405,19 +449,31 @@ function Workbench({ route, auth, useStoredEvents }) {
     const context = rememberTurn(event, change.title, { ...run, proposal: { kind: 'rescue', analysis } });
     context.selected = preferredIndex >= 0 ? preferredIndex + 1 : undefined;
     run.context = context;
-    const turns = (conversation.current.get(event.id) ?? []).filter(item => item.reviewChangeId !== change.id);
-    conversation.current.set(event.id, [...turns, run].slice(-4));
+    saveConversation(event.id, turns => [...turns.filter(item => item.reviewChangeId !== change.id), run]);
     setAgentRun(run);
   }
-  async function releaseRescue(change, option) {
+  async function rescueChange(incident, previous, preferred) {
+    if (!account || !shared) throw new Error('活动服务正在读取议程，请稍后重试。');
+    const operations = rescueOperations(event);
+    const result = await registration.change('/rescue/preview', 'POST', {
+      revision: shared.revision, incident, operations, preferredMoves: preferred?.moves,
+    });
+    const { analysis, state, preferredIndex, invalidatedSelection, proofVersion } = result;
+    return { id: previous?.id ?? uid(), kind: 'rescue', title: rescueTitle(analysis.incident),
+      reason: rescueSummary(analysis), analysis, revision: state.revision, version: state.event.version, proofVersion,
+      operationsKey: JSON.stringify(operations), preferredIndex, invalidatedSelection };
+  }
+  async function releaseRescue(change, option, { fromChat = false } = {}) {
     if (!account || !shared) throw new Error('活动服务暂不可用。');
-    if (change.operationsKey !== JSON.stringify(rescueOperations(event))) throw new Error('现场或人员资料有更新，请重新计算。');
+    const operations = rescueOperations(event);
+    if (!fromChat && change.operationsKey !== JSON.stringify(operations)) throw new Error('现场或人员资料有更新，请重新计算。');
     const updated = await registration.change('/rescue/publish', 'POST', {
-      changeId: change.id, revision: change.revision, incident: change.analysis.incident, moves: option.moves, proof: option.proof,
+      changeId: change.id, revision: change.revision, incident: change.analysis.incident, moves: option.moves, proof: option.proof, operations,
     });
     update(current => ({ ...current, change: current.change?.id === change.id ? null : current.change }));
     notify('整场调整已发布 · v' + updated.event.version + '，已生成通知草稿');
-    navigate('change/released/' + change.id);
+    if (!fromChat) navigate('change/released/' + change.id);
+    return updated;
   }
   function refreshMoveChange() {
     const change = event.change;
@@ -454,7 +510,7 @@ function Workbench({ route, auth, useStoredEvents }) {
       for (const [index, file] of files.entries()) {
         let result;
         let outcome;
-        try { result = await importSource(eventId, file, agentAccess, replacementId); } catch (error) {
+        try { result = await importSource(eventId, file, agentAccess, replacementId, account?.id); } catch (error) {
           outcome = { state: '导入失败', note: error.message, tone: 'rose' };
           progress = { ...progress, errors: [...progress.errors, { name: file.name, reason: error.message }] };
         }
@@ -509,7 +565,7 @@ function Workbench({ route, auth, useStoredEvents }) {
       showModal('create');
       return;
     }
-    if (requestWholeClosure(text)) return;
+    if (closureRequest(text)) return void ask(text);
     const session = event.agenda.find(item => text.includes(item.title)) ??
       event.agenda.find(item => (text.includes('圆桌') && item.title.includes('圆桌')) || (text.includes('工作坊') && item.title.includes('工作坊')));
     const closedRoom = text.match(/([ABC])\s*厅\s*(?:临时)?(?:关闭|不可用)/i)?.[1].toUpperCase();
@@ -519,36 +575,126 @@ function Workbench({ route, auth, useStoredEvents }) {
       setAgentRun({ eventId: event.id, question: text, error: '本机演练支持「把圆桌移到午餐后」「把工作坊换到 B 厅」和「我想办一场 150 人的论坛」。', code: 'MODEL_NOT_CONFIGURED' });
       return;
     }
+    if (account && event.version) return void ask(text, { kind: 'move', eventId: event.id, before: session,
+      room: room || session.room, start: time || session.start, closedRoom });
     setAgentRun(null);
     openChange(makeMoveChange(event, session, { room: room || session.room, start: time || session.start, closedRoom }, 'Agent 根据本地规则生成的调整建议'));
   }
 
-  function requestWholeClosure(question) {
-    if (!account || !/(整场|全场|多环节|两个环节|2\s*个环节)/.test(question) || !/(关闭|停用|不可用)/.test(question)) return false;
+  function closureRequest(question) {
+    if (!account || !/(整场|全场|多环节|两个环节|2\s*个环节)/.test(question) || !/(关闭|停用|不可用)/.test(question)) return null;
     const explicitRoom = event.rooms.find(item => question.includes(item.id + '厅') || question.includes(item.id + ' 厅'));
     const sampleMainRoom = event.isSample && question.includes('主会场') && event.rooms.find(item => item.id === 'A');
     const room = explicitRoom || sampleMainRoom;
     const times = [...question.matchAll(/\b(?:[01]\d|2[0-3]):[0-5]\d\b/g)].map(match => match[0]);
-    if (!room || times.length !== 2) return false;
-    void prepareRescue({ kind: 'closure', room: room.id, at: times[0], until: times[1] }).catch(error =>
-      setAgentRun({ eventId: event.id, question, error: error.message }));
-    return true;
+    return room && times.length === 2 ? { kind: 'closure', room: room.id, at: times[0], until: times[1] } : null;
   }
 
-  async function ask(question) {
+  async function previewExecution(result) {
+    const proposal = result.proposal;
+    if (!account || !event.version || proposal?.eventId !== event.id) return result;
+    if (!shared) throw new Error('活动服务正在读取议程，请稍后重试。');
+    const confirmation = { accountId: account.id };
+    function summarize(option) {
+      return option.impact ? { ...option, impact: summarizeExecutionImpact(option.impact) } : option;
+    }
+    if (proposal.kind === 'rescue') {
+      const change = await rescueChange(proposal.analysis.incident);
+      const { id, revision, version } = change;
+      const analysis = { ...change.analysis, plans: change.analysis.plans.map(summarize) };
+      return { ...result, answer: change.reason, proposal: { ...proposal, analysis },
+        confirmation: { ...confirmation, id, revision, version } };
+    }
+    if (proposal.kind !== 'move') return result;
+    const changeId = uid();
+    const existing = event.change?.sessionId === proposal.before.id ? event.change : null;
+    const move = { sessionId: proposal.before.id, closedRoom: existing?.closedRoom || proposal.closedRoom || '',
+      earliest: existing?.earliest || proposal.earliest || '' };
+    const { analysis, before, revision, version } = await registration.change('/move/preview', 'POST', {
+      changeId, revision: shared.revision, operations: rescueOperations(event), ...move, room: proposal.room, start: proposal.start,
+    });
+    const choices = { ...analysis, requested: summarize(analysis.requested), alternatives: analysis.alternatives.map(summarize) };
+    const available = choices.alternatives.length + Number(Boolean(choices.requested.proof));
+    return {
+      ...result, answer: available ? '已根据当前发布版本核对议程、会场、报名与人员安排，可在下方比较各方案及影响。' :
+        '当前搜索范围内没有可发布的方案，请查看会场和时间限制。',
+      proposal: { ...proposal, before, analysis: choices },
+      confirmation: { ...confirmation, id: changeId, revision, version, move },
+    };
+  }
+
+  async function executeAgentChoice(question, number) {
+    const source = agentRun?.eventId === event.id ? agentRun : null;
+    const confirmation = source?.confirmation;
+    if (!confirmation || !source.proposal) {
+      const released = source?.reviewChangeId && event.history.some(change => change.id === source.reviewChangeId);
+      let message = '请登录活动负责人账号后确认发布。';
+      if (account) message = '请先在当前对话预览变更方案，再回复要执行的编号。';
+      if (released) message = '这张变更单已发布，请查看发布记录。';
+      else if (source?.reviewChangeId && source.reviewChangeId === event.change?.id) message = '方案已转入变更单，请在那里核对并发布。';
+      if (source) setAgentRun({ ...source, execution: { question, message } });
+      else setAgentRun({ eventId: event.id, question, answer: message });
+      return;
+    }
+    const { analysis, kind } = source.proposal;
+    const option = kind === 'rescue' ? analysis.plans[number - 1] : [analysis.requested, ...analysis.alternatives][number - 1];
+    const released = event.history.find(change => change.id === confirmation.id);
+    if (released) {
+      setAgentRun({ ...source, reviewChangeId: released.id, execution: { question, message: '这张变更单已发布。' } });
+      return;
+    }
+    const stale = shared && (confirmation.revision !== shared.revision || confirmation.version !== event.version);
+    const problem = !account || account.id !== confirmation.accountId ? '请使用预览时的活动负责人账号确认。' :
+      !shared ? '活动服务正在读取议程，请稍后重试。' : stale ? '活动数据已更新，请重新预览后再确认。' :
+        !option?.proof ? '该编号不存在或未通过校验，请核对可执行的方案。' : '';
+    if (problem) {
+      setAgentRun({ ...source, execution: { question, message: problem, refresh: Boolean(stale), warning: true } });
+      return;
+    }
+    const request = { ...source, execution: { question, pending: true, number } };
+    agentExecution.current = request;
+    setAgentRun(request);
+    try {
+      const state = kind === 'rescue'
+        ? await releaseRescue({ ...confirmation, analysis }, option, { fromChat: true })
+        : await publish(option.candidate, false, option.proof, confirmation);
+      const release = (kind === 'rescue' ? state.rescueReleases : state.moveReleases).find(item => item.id === confirmation.id);
+      const answer = '方案 ' + number + '已发布 · v' + release.version +
+        '。议程、签到点、岗位、台本和大屏已按新版本更新。' +
+        (release.count ? '已生成 ' + release.count + ' 人的通知草稿。' : '当前没有需要生成草稿的通知对象。');
+      const receipt = { eventId: event.id, question, answer, reviewChangeId: release.id,
+        context: rememberTurn({ ...event, version: release.version }, question, { answer }) };
+      saveConversation(event.id, turns => [...turns, receipt]);
+      setAgentRun(current => current === request ? receipt : current);
+    } catch (error) {
+      const refresh = error.status === 409;
+      setAgentRun(current => current === request ? { ...source, execution: { question, message: error.message, refresh, warning: true } } : current);
+    } finally {
+      if (agentExecution.current === request) agentExecution.current = null;
+    }
+  }
+
+  async function ask(question, localProposal) {
+    if (agentExecution.current) return;
     agentRequest.current?.abort();
-    if (requestWholeClosure(question)) return;
+    const number = executionChoice(question);
+    if (number !== null) return void executeAgentChoice(question, number);
+    const incident = closureRequest(question);
     const request = new AbortController();
     agentRequest.current = request;
     setAgentRun({ eventId: event.id, question, pending: true });
     try {
-      const previous = conversation.current.get(event.id) ?? [];
-      const result = await askModel(question, event, request.signal, account?.id, previous.map(entry => entry.context));
+      const previous = conversation.get(event.id) ?? [];
+      const suggested = incident ? { proposal: { kind: 'rescue', eventId: event.id, analysis: { incident } } } :
+        localProposal ? { proposal: localProposal } :
+          await askModel(question, event, request.signal, account?.id, previous.slice(-4).map(entry => entry.context), agentModel);
+      if (request.signal.aborted) return;
+      const result = await previewExecution(suggested);
       if (!request.signal.aborted) {
-        const run = { ...result, eventId: event.id, question };
+        const run = { ...result, eventId: event.id, question, ...(localProposal && { local: true }) };
         if (!result.error) {
           run.context = rememberTurn(event, question, result);
-          conversation.current.set(event.id, [...previous, run].slice(-4));
+          saveConversation(event.id, turns => [...turns, run]);
         }
         setAgentRun(run);
       }
@@ -560,11 +706,12 @@ function Workbench({ route, auth, useStoredEvents }) {
   }
 
   function selectCandidate(number) {
-    const turns = conversation.current.get(event.id);
-    if (!agentRun?.context || turns?.at(-1) !== agentRun) return;
-    const run = { ...agentRun, context: { ...agentRun.context, selected: number } };
-    conversation.current.set(event.id, [...turns.slice(0, -1), run]);
-    setAgentRun(run);
+    const turns = conversation.get(event.id);
+    const last = turns?.at(-1);
+    if (!agentRun?.context || !last || (last !== agentRun && (!last.confirmation || last.confirmation.id !== agentRun.confirmation?.id))) return;
+    const run = { ...last, context: { ...last.context, selected: number } };
+    saveConversation(event.id, current => current.at(-1) === last ? [...current.slice(0, -1), run] : current);
+    setAgentRun(agentRun.execution ? { ...run, execution: agentRun.execution } : run);
   }
 
   function stopAgent() {
@@ -587,19 +734,31 @@ function Workbench({ route, auth, useStoredEvents }) {
     }
     const before = proposal.before;
     const session = event.agenda.find(item => item.id === before.id);
+    function retireProposal(next) {
+      const run = { ...agentRun, ...next, proposal: null, confirmation: null };
+      saveConversation(event.id, turns => {
+        const last = turns.at(-1);
+        if (last === agentRun || (last?.confirmation && last.confirmation.id === agentRun.confirmation?.id)) {
+          return [...turns.slice(0, -1), run];
+        }
+        return turns;
+      });
+      setAgentRun(run);
+    }
     if (proposal.eventId !== event.id || !session || session.start !== before.start || session.end !== before.end || session.room !== before.room) {
-      setAgentRun(current => ({ ...current, proposal: null, error: '议程已更新，请重新向 Agent 提出调整。' }));
+      retireProposal({ error: '议程已更新，请重新向 Agent 提出调整。' });
       return;
     }
     const change = makeMoveChange(event, session, {
       room: proposal.room, start: proposal.start, closedRoom: proposal.closedRoom, earliest: proposal.earliest,
     }, 'Agent 提出的调整建议', candidate);
-    setAgentRun(current => ({ ...current, proposal: null, reviewChangeId: change.id }));
+    retireProposal({ reviewChangeId: change.id });
     openChange(change);
   }
 
   const sourceIssueId = path === 'sources' && routeEventId === 'issue' ? role : undefined;
-  const props = { event, readOnly, mobile, update, navigate, notify, ask, openChange, publish, prepareRescue, releaseRescue,
+  const props = { event, readOnly, mobile, ownerId: account?.id, update, navigate, notify, ask, openChange, publish, prepareRescue, releaseRescue,
+    openAccount: () => showModal('account'),
     refreshMoveChange, copy, activateChange, openImport, openDraft: () => showModal('draft'), importFiles, sourceIssueId, registration,
     showDesignMaterials: path === 'materials' && routeEventId === 'design',
     focusTaskId: path === 'prep' && routeEventId === 'task' ? role : '',
@@ -630,21 +789,24 @@ function Workbench({ route, auth, useStoredEvents }) {
               {!mobile && <Tooltip text="Agent 工作台"><button ref={agentToggle} type="button" className={'button toolbar-action' + (agentOpen ? ' primary' : '')}
                 aria-label="切换 Agent 工作台" aria-expanded={agentOpen} aria-controls={dockAgent ? agentId : undefined}
                 aria-haspopup={dockAgent ? undefined : 'dialog'} onClick={toggleAgent}><Sparkles size={18} aria-hidden="true" /><span>Agent</span></button></Tooltip>}
-              <Tooltip text="模型设置"><button type="button" className="icon-button activity-settings" aria-label="模型设置" aria-haspopup="dialog"
-                onClick={() => showModal('settings')}><Settings size={19} aria-hidden="true" /></button></Tooltip>
-              <button type="button" className="icon-button activity-account" aria-label={account ? '打开账户设置' : '登录工作台'}
-                aria-haspopup="dialog" onClick={() => showModal('account')}><AccountAvatar user={account} /></button>
+              <Tooltip text="模型设置"><IconButton label="模型设置" icon={Settings} className="activity-settings" aria-haspopup="dialog"
+                onClick={() => showModal('settings')} /></Tooltip>
+              <IconButton label={account ? '打开账户设置' : '登录工作台'} className="activity-account" variant="ghost"
+                aria-haspopup="dialog" onClick={() => showModal('account')}><AccountAvatar user={account} /></IconButton>
             </div>
           </div>
         </header>
         <div className={'activity-layout' + (dockAgent && agentOpen ? ' with-agent' : '')}>
           <ActivityDirectory id={directoryId} page={page} mobile={mobile} navigate={navigate} agentOpen={agentOpen} toggleAgent={toggleAgent} />
           <main id="workbench" tabIndex={-1} className="workspace activity-workspace">
+            {account && <WorkspaceSync workspace={workspace} />}
             <ActivitySections key={event.id} {...props} />
           </main>
           <AgentWorkspace key={event.id} id={agentId} event={event} account={account} docked={dockAgent} open={agentOpen} close={closeAgent}
-            history={(conversation.current.get(event.id) ?? []).filter(turn => turn !== agentRun && turn.question !== agentRun?.question)}
-            clearHistory={() => { agentRequest.current?.abort(); conversation.current.delete(event.id); setAgentRun(null); }}
+            modelChoice={agentModel} onModelChoice={setAgentModel} settingsOpen={modal === 'settings'}
+            history={(conversation.get(event.id) ?? []).filter(turn =>
+              turn !== agentRun && (!turn.confirmation || turn.confirmation.id !== agentRun?.confirmation?.id))}
+            clearHistory={() => { agentRequest.current?.abort(); saveConversation(event.id, () => []); setAgentRun(null); }}
             selectCandidate={selectCandidate}
             run={agentRun?.eventId === event.id ? agentRun : null} ask={ask} stop={stopAgent} askLocal={askLocal}
             openSettings={() => showModal('settings')} reviewProposal={reviewProposal}
@@ -657,9 +819,10 @@ function Workbench({ route, auth, useStoredEvents }) {
         ? { ...item, change, draftChanges: [item.change, ...(item.draftChanges ?? [])].filter(row => row && row.id !== change.id) } : item));
       select(id, target);
     }} />}
-    {modal === 'account' && <AccountDialog {...auth} openTeam={() => setModal('team')} close={() => setModal('')} />}
+    {modal === 'account' && <AccountDialog {...auth} workspace={workspace}
+      openTeam={() => setModal('team')} close={() => setModal('')} />}
     {modal === 'settings' && <ModelSettings ownerId={account?.id} close={() => setModal('')} />}
-    {modal === 'draft' && account && <WorkspaceDraftDialog event={event} update={update} notify={notify} close={() => setModal('')} />}
+    {modal === 'draft' && account && <WorkspaceDraftDialog ownerId={account.id} event={event} update={update} notify={notify} close={() => setModal('')} />}
     <Toast feedback={toast} dismiss={dismissToast} />
   </>;
 }

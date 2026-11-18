@@ -5,6 +5,7 @@ import { Dialog, Notice } from './interactions';
 import { Select } from './Select';
 import { ActiveRescue, ReleasedRescue } from './RescueChange';
 import { rescueOperations, signupSnapshot } from './registrationRules';
+import { rescueProofVersion } from './rescueScheduling';
 import { ProjectMemory } from './ProjectMemory';
 import { ImportReview, OrganizedPlan } from './ImportReview';
 import { checkCandidate, makeChange, manualPlan, money, moveCandidate, participantCount, roomLabel, timeRange } from './model';
@@ -12,7 +13,7 @@ import { changeReviewKey, describeChangeImpact } from './changeImpact';
 import { analyzeMove, checkinPoint, sameCandidate } from './scheduling';
 import { assessExecutionPlan } from './executionPlan';
 
-export function Sources({ event, readOnly, mobile, update, notify, navigate, importFiles, importRun, memoryEvidenceId, closeSource, sourceReturnLabel, openImport, organize, organizationRun, sourceIssueId }) {
+export function Sources({ event, readOnly, mobile, ownerId, update, notify, navigate, importFiles, importRun, memoryEvidenceId, closeSource, sourceReturnLabel, openImport, organize, organizationRun, sourceIssueId }) {
   const [selectedIssue, setSelectedIssue] = useState(sourceIssueId);
   const [editingSource, setEditingSource] = useState(null);
   useEffect(() => { if (sourceIssueId) setSelectedIssue(sourceIssueId); }, [sourceIssueId]);
@@ -61,7 +62,7 @@ export function Sources({ event, readOnly, mobile, update, notify, navigate, imp
     </div>}
     {!readOnly && <ProjectMemory eventId={event.id} mobile={mobile} importFiles={importFiles} importRun={importRun} evidenceId={memoryEvidenceId}
       onCloseEvidence={closeSource} returnLabel={sourceReturnLabel} onAccessChange={allowed => organize(event.id, allowed)}>
-      <ImportReview {...{ event, update, notify, navigate, organize, organizationRun, importRun }} />
+      <ImportReview {...{ event, ownerId, update, notify, navigate, organize, organizationRun, importRun }} />
     </ProjectMemory>}
     {event.files.length > 0 && <details className="activity-file-history">
       <summary>样例与旧资料登记（{event.files.length}）</summary>
@@ -265,16 +266,17 @@ function AffectedPeople({ impact }) {
   </>;
 }
 
-function ChangeNotices({ impact }) {
+function ChangeNotices({ impact, draft = false }) {
   const { notice, personnelNotices = [] } = impact;
-  return <Panel title="变更通知">
-    <div className="notice-grid">
+  const label = draft ? '通知草稿 · 待发送' : '通知预览（演练）';
+  return <Panel title={draft ? '变更通知草稿' : '变更通知'}>
+    {(!draft || notice.recipients.length > 0) && <div className="notice-grid">
       <div className="recipient"><UsersRound size={21} /><div><span>接收对象</span><strong>{notice.recipients.length} 位已确认观众</strong></div></div>
-      <div><p className="muted">通知预览（演练）</p><div className="message-preview">{notice.body}</div></div>
-    </div>
+      <div><p className="muted">{label}</p><div className="message-preview">{notice.body}</div></div>
+    </div>}
     {personnelNotices.map(({ role, recipients, body }) => <div className="notice-grid impact-registration-group" key={role}>
       <div className="recipient"><UsersRound size={21} /><div><span>{role} · {recipients.length} 人</span><strong>{recipients.join('、')}</strong></div></div>
-      <div><p className="muted">通知预览（演练）</p><div className="message-preview">{body}</div></div>
+      <div><p className="muted">{label}</p><div className="message-preview">{body}</div></div>
     </div>)}
   </Panel>;
 }
@@ -373,16 +375,17 @@ export function ChangePage({ event, readOnly, publish, refreshMoveChange, naviga
   const showDraft = event.change && !selectedRelease;
   const rescueDraft = showDraft && event.change.kind === 'rescue';
   const rescueRelease = !showDraft && latest?.kind === 'rescue';
-  const stale = rescueDraft && (registration.current?.revision !== event.change.revision ||
+  const stale = rescueDraft && ((!readOnly && event.change.proofVersion !== rescueProofVersion) || registration.current?.revision !== event.change.revision ||
     event.change.operationsKey !== JSON.stringify(rescueOperations(event)));
   return <>
     <PageHead heading="h3" title="变更单" description={readOnly ? '比较候选方案，查看发布影响和通知预览。' : '核对影响、比较方案，再统一发布。'} />
-    {rescueDraft ? <ActiveRescue key={JSON.stringify([event.change.id, event.change.revision, event.change.analysis.incident, event.change.preferredIndex])}
+    {rescueDraft ? <ActiveRescue key={JSON.stringify([event.change.id, event.change.revision, event.change.analysis.incident,
+      event.change.preferredIndex, event.change.analysis.plans[0]?.proof])}
       event={event} change={event.change} readOnly={readOnly} stale={stale} prepareRescue={prepareRescue} releaseRescue={releaseRescue} />
       : rescueRelease ? <ReleasedRescue release={latest} navigate={navigate} />
       : showDraft ? <ActiveChange key={event.change.id} event={event} readOnly={readOnly} publish={publish} refreshMoveChange={refreshMoveChange} /> : <Panel title={selectedRelease ? '发布记录' : latest ? '最近发布' : '待发布变更'}>
       {latest ? <>
-        <Notice tone="success">{latest.title}已发布 · v{latest.version} · {latest.notified ? '已记录演练通知' : '仅发布安排'}</Notice>
+        <Notice tone="success">{latest.title}已发布 · v{latest.version} · {latest.notices?.length ? '已生成通知草稿' : latest.notified ? '已记录演练通知' : '仅发布安排'}</Notice>
         <ImpactTable before={latest.before} after={latest.after} impact={latest.impact} />
         <div className="actions publish-actions">
           <LinkButton onClick={() => navigate('live')}>查看现场看板</LinkButton>
@@ -393,6 +396,7 @@ export function ChangePage({ event, readOnly, publish, refreshMoveChange, naviga
     {rescueRelease && selectedRelease && event.change && <LinkButton onClick={() => navigate('change')}>返回待发布变更单</LinkButton>}
     {!showDraft && latest?.impact && <AffectedPeople impact={latest.impact} />}
     {!showDraft && latest?.notified && latest.impact && <ChangeNotices impact={latest.impact} />}
+    {!showDraft && latest?.kind === 'move' && latest.notices?.length > 0 && <ChangeNotices impact={latest.impact} draft />}
     {!selectedRelease && !readOnly && event.draftChanges?.length > 0 && <Panel title="其他待评估变更">
       <div className="selection-list">{event.draftChanges.map(change => <button key={change.id} onClick={() => activateChange(change)}>{change.title}<span className="muted">{change.reason}</span></button>)}</div>
     </Panel>}

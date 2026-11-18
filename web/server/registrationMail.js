@@ -10,13 +10,46 @@ export function publicRegistrationOrigin(value) {
   return url.origin;
 }
 
+async function resendErrorName(response) {
+  try {
+    const error = await response.json();
+    return typeof error?.name === 'string' ? error.name : '';
+  } catch {
+    return '';
+  }
+}
+
+async function sendRejection(response, sender) {
+  const name = await resendErrorName(response);
+  if (response.status === 401 || name === 'invalid_api_key' || name === 'missing_api_key') {
+    return 'Resend 未通过密钥校验。请核对服务端配置的发信密钥。';
+  }
+  if (response.status === 403) {
+    if (name === 'validation_error' && /@resend\.dev(?:\s*>|$)/i.test(sender)) {
+      return 'Resend 测试发件地址只能发给账号绑定的邮箱。向其他收件人发送时，请改用已验证域的发件地址。';
+    }
+    return 'Resend 拒绝发信。请核对发件域是否已验证，以及发信密钥是否允许使用该域。';
+  }
+  if (response.status === 429) {
+    if (name === 'daily_quota_exceeded' || name === 'monthly_quota_exceeded') {
+      return 'Resend 发信额度已用完。请在服务商后台核对额度，再重试这封邮件。';
+    }
+    return 'Resend 暂时限制发信频率。请稍后重试这封邮件。';
+  }
+  return '邮件服务拒绝提交（HTTP ' + response.status + '）。';
+}
+
 export function createRegistrationMail(store, env, endpoint = 'https://api.resend.com') {
   const { db, now, transaction, findEvent, personFor, tokenFor, issueLink, mailSelect } = store.mail;
   const key = env.HUIXU_RESEND_API_KEY?.trim();
   const sender = env.HUIXU_MAIL_FROM?.trim();
   const origin = publicRegistrationOrigin(env.HUIXU_PUBLIC_ORIGIN);
   const configured = Boolean(key && sender && origin);
-  const reason = !origin ? '请先配置参与者可访问的 HTTPS 地址。' : '请先配置 Resend 密钥和已验证的发件地址。';
+  const missing = [];
+  if (!origin) missing.push('参与者可访问的 HTTPS 应用地址');
+  if (!key) missing.push('Resend 发信密钥');
+  if (!sender) missing.push('已验证的发件地址');
+  const reason = missing.length ? '请先配置' + missing.join('、') + '。' : '';
   const fingerprint = value => createHash('sha256').update(value).digest('hex');
 
   function records(owner, eventId) {
@@ -28,7 +61,7 @@ export function createRegistrationMail(store, env, endpoint = 'https://api.resen
         }
         return record;
       });
-    return { configured, reason: configured ? '' : reason, records };
+    return { configured, reason, records };
   }
 
   function preview(owner, eventId, personId) {
@@ -96,7 +129,7 @@ export function createRegistrationMail(store, env, endpoint = 'https://api.resen
         }
       } else if (response.status >= 400 && response.status < 500 && ![408, 409].includes(response.status)) {
         status = 'failed';
-        error = '邮件服务拒绝提交（HTTP ' + response.status + '）。';
+        error = await sendRejection(response, row.sender);
       }
     } catch {
       // 超时、断线与不明确的服务响应保留为待核对，避免重复发信。
@@ -109,14 +142,29 @@ export function createRegistrationMail(store, env, endpoint = 'https://api.resen
     findEvent(eventId, owner);
     const mail = getMail(eventId, id);
     if (!key || !mail.provider_id) return records(owner, eventId);
-    const response = await fetch(endpoint + '/emails/' + encodeURIComponent(mail.provider_id), {
-      headers: { Authorization: 'Bearer ' + key }, redirect: 'error', signal: AbortSignal.timeout(10000),
-    });
-    if (!response.ok) throw new RegistrationError(502, '邮件服务暂时无法返回投递状态。');
-    const { last_event: lastEvent } = await response.json();
+    let lastEvent;
+    try {
+      const response = await fetch(endpoint + '/emails/' + encodeURIComponent(mail.provider_id), {
+        headers: { Authorization: 'Bearer ' + key }, redirect: 'error', signal: AbortSignal.timeout(10000),
+      });
+      if (!response.ok) {
+        const error = await resendErrorName(response);
+        if (error === 'restricted_api_key') {
+          throw new RegistrationError(409, '当前 Resend 密钥仅允许发信。请到 Resend 的 Emails 页面核对投递状态。');
+        }
+        throw new RegistrationError(502, '邮件服务暂时无法返回投递状态。');
+      }
+      lastEvent = (await response.json())?.last_event;
+      if (typeof lastEvent !== 'string') throw new RegistrationError(502, '邮件服务未返回有效的投递状态。');
+    } catch (error) {
+      if (error instanceof RegistrationError) throw error;
+      throw new RegistrationError(502, '邮件服务暂时无法返回投递状态。');
+    }
     const deliveryStatus = { delivered: 'delivered', opened: 'opened', clicked: 'clicked', bounced: 'bounced',
-      failed: 'bounced', complained: 'complained', suppressed: 'bounced', delivery_delayed: 'delayed' }[lastEvent];
-    if (deliveryStatus) db.prepare('UPDATE signup_mail SET status = ? WHERE id = ?').run(deliveryStatus, id);
+      failed: 'bounced', complained: 'complained', suppressed: 'bounced', delivery_delayed: 'delayed' };
+    if (Object.hasOwn(deliveryStatus, lastEvent)) {
+      db.prepare('UPDATE signup_mail SET status = ? WHERE id = ?').run(deliveryStatus[lastEvent], id);
+    }
     return records(owner, eventId);
   }
 

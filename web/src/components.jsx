@@ -1,5 +1,5 @@
 import { useEffect, useId, useRef, useState } from 'react';
-import { ChevronRight, X } from 'lucide-react';
+import { ChevronRight, LoaderCircle, X } from 'lucide-react';
 
 export function PageHead({ title, description, heading: Heading = 'h1', children }) {
   return <header className="page-head">
@@ -15,8 +15,16 @@ export function Panel({ title, action, children, className = '' }) {
   </section>;
 }
 
-export function Badge({ tone = 'neutral', children }) {
-  return <span className={'badge ' + tone}>{children}</span>;
+export function Badge({ tone = 'neutral', status = false, children }) {
+  return <span className={'badge ' + tone} data-status={status || undefined}>{children}</span>;
+}
+
+export function IconButton({ label, icon: Icon, variant = 'outline', className = '', type = 'button', busy = false, children, ...props }) {
+  const Glyph = busy ? LoaderCircle : Icon;
+  return <button {...props} type={type} className={'icon-button' + (className ? ' ' + className : '')}
+    data-variant={variant} aria-label={label} aria-busy={busy || undefined}>
+    {Glyph ? <Glyph className={'control-icon' + (busy ? ' is-spinning' : '')} size={18} strokeWidth={1.8} aria-hidden="true" /> : children}
+  </button>;
 }
 
 export function IconTile({ icon: Icon, tone = 'blue' }) {

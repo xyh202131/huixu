@@ -63,7 +63,7 @@ function FieldReviewEditor({ fact, saved, draft, save, reset, openSource, close 
   </Dialog>;
 }
 
-export function ImportReview({ event, update, notify, navigate, organize, organizationRun, importRun }) {
+export function ImportReview({ event, ownerId, update, notify, navigate, organize, organizationRun, importRun }) {
   const [snapshot, setSnapshot] = useState(null);
   const [problem, setProblem] = useState('');
   const [generating, setGenerating] = useState(false);
@@ -81,7 +81,7 @@ export function ImportReview({ event, update, notify, navigate, organize, organi
     let timer;
     async function load() {
       try {
-        const next = await organizationRequest(event.id, 'GET', request.signal);
+        const next = await organizationRequest(event.id, 'GET', request.signal, ownerId);
         if (request.signal.aborted) return;
         setSnapshot(next);
         setProblem('');
@@ -92,10 +92,12 @@ export function ImportReview({ event, update, notify, navigate, organize, organi
     }
     void load();
     return () => { request.abort(); clearTimeout(timer); };
-  }, [event.id, importRun, organizationRun?.pending, refreshToken]);
+  }, [event.id, ownerId, importRun, organizationRun?.pending, refreshToken]);
 
   const busy = importRun?.pending || organizationRun?.pending || snapshot?.status === 'running';
   const review = snapshot?.review;
+  const partial = snapshot?.status === 'partial';
+  const remaining = review ? Math.max(0, review.total - review.covered - review.failed) : 0;
   useEffect(() => {
     if (!busy && review && location.hash.startsWith('#/sources/conflict/')) {
       const key = location.hash.slice('#/sources/conflict/'.length);
@@ -117,6 +119,9 @@ export function ImportReview({ event, update, notify, navigate, organize, organi
   const plan = review && planFromReview(review, choices);
   const missing = plan ? missingPlanFields(plan, unresolved) : [];
   const error = problem || organizationRun?.error;
+  let organizeLabel = error ? '重试整理' : '整理当前资料';
+  if (review && remaining) organizeLabel = '继续整理';
+  else if (review?.failed) organizeLabel = '重试失败片段';
   const syncKeys = review?.facts.filter(fact => selectedKeys.includes(fact.key) &&
     (Object.hasOwn(choices, fact.key) ? Boolean(choices[fact.key]) : fact.options.length === 1)).map(fact => fact.key) ?? [];
 
@@ -147,8 +152,10 @@ export function ImportReview({ event, update, notify, navigate, organize, organi
     setGenerating(true);
     setProblem('');
     try {
-      const latest = await organizationRequest(event.id);
-      if (latest.status !== 'ready' || latest.review?.revision !== review.revision) {
+      const latest = await organizationRequest(event.id, 'GET', undefined, ownerId);
+      const available = ['ready', 'partial'].includes(latest.status) && latest.review?.covered > 0;
+      if (!available || latest.review.revision !== review.revision ||
+          latest.review.covered !== review.covered || latest.review.failed !== review.failed) {
         setSnapshot(latest);
         setProblem('资料有新变化，请核对最新的整理结果。');
         return;
@@ -172,8 +179,8 @@ export function ImportReview({ event, update, notify, navigate, organize, organi
     }
   }
 
-  return <Panel title="Agent 智能整理" className="import-review" action={<Badge tone={busy ? 'amber' : review ? 'success' : 'neutral'}>
-    {busy ? '处理中' : review ? '可核对' : '待整理'}
+  return <Panel title="Agent 智能整理" className="import-review" action={<Badge tone={busy || partial ? 'amber' : review ? 'success' : 'neutral'}>
+    {busy ? '处理中' : partial ? '部分完成' : review ? '可核对' : '待整理'}
   </Badge>}>
     {busy ? <Notice tone="info" announce>{importRun?.pending ? '资料正在解析。已允许引用的资料会在本批导入完成后开始整理。' : 'Agent 正在提取活动信息并比对原文。'}</Notice> :
       <>
@@ -181,11 +188,14 @@ export function ImportReview({ event, update, notify, navigate, organize, organi
         {snapshot?.excluded > 0 && <p className="muted">{snapshot.excluded} 份资料当前仅供本机检索。允许 Agent 引用后，会纳入整理。</p>}
         {snapshot?.unparsed > 0 && <p className="muted">{snapshot.unparsed} 份资料暂无可提取的文字。解析状态可在活动索引中查看。</p>}
         {!review && !snapshot?.total && <Empty>导入资料并允许 Agent 引用后，这里会显示提取结果和待核对项。</Empty>}
-        {snapshot?.total > 0 && (!review || review.failed > 0) && <button type="button" className="button" onClick={() => organize(event.id)}>
-          <Sparkles size={17} aria-hidden="true" />{error || review ? '重试整理' : '整理当前资料'}
+        {snapshot?.total > 0 && (!review || partial) && <button type="button" className="button" onClick={() => organize(event.id)}>
+          <Sparkles size={17} aria-hidden="true" />{organizeLabel}
         </button>}
+        {partial && <Notice tone="warning" announce>已整理 {review.covered} / {review.total} 个片段。
+          {remaining > 0 && ` 有 ${remaining} 个待处理。`}{review.failed > 0 && ` 有 ${review.failed} 个失败。`}
+          {review.covered > 0 && ' 可以先用已核对的内容生成草稿。'}
+        </Notice>}
         {review && <>
-          {review.covered < review.total && <Notice tone="warning">本次整理完成 {review.covered} / {review.total} 个片段。仍有 {review.total - review.covered} 个片段未完成，可在活动索引中核对。</Notice>}
           <dl className="import-review-summary" aria-label="整理结果">
             <ReviewMetric count={review.facts.length} label="已提取字段" />
             <ReviewMetric count={unresolved.length} label="待确认冲突" pending={unresolved.length > 0} />
@@ -247,14 +257,14 @@ export function ImportReview({ event, update, notify, navigate, organize, organi
           <div className="import-review-footer">
             {unresolved.length > 0 && <p className="muted">未确认冲突暂留空，其余信息可以先生成草稿。</p>}
             {event.organizedPlan && <button type="button" className="button" onClick={() => navigate('schedule/plan')}>打开现有草稿</button>}
-            {event.organizedPlan && <button type="button" className="button primary" disabled={generating || !syncKeys.length}
+            {review.covered > 0 && event.organizedPlan && <button type="button" className="button primary" disabled={generating || !syncKeys.length}
               onClick={() => generate(true)}>更新所选字段（{syncKeys.length}）</button>}
-            {event.organizedPlan && !generating ?
+            {review.covered > 0 && (event.organizedPlan && !generating ?
               <Popconfirm label="用整理结果替换草稿" confirmLabel="确认替换" description="替换后，现有草稿的手工修改会被覆盖。"
                 className="button primary" onConfirm={generate} /> :
               <button type="button" className="button primary" disabled={generating} onClick={() => generate()}>
                 {generating ? '正在生成' : '生成可编辑方案'}<ArrowRight size={17} aria-hidden="true" />
-              </button>}
+              </button>)}
           </div>
         </>}
       </>}

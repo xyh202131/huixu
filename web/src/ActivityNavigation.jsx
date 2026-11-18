@@ -1,12 +1,13 @@
 import { useEffect, useRef, useState } from 'react';
-import { BookOpen, Calendar, FileText, Home, Layers, List, Monitor, Sparkles, Ticket, X } from 'lucide-react';
+import { BookOpen, Calendar, ClipboardList, FileText, Home, LayoutList, Monitor, Sparkles, Ticket, X } from 'lucide-react';
+import { IconButton } from './components';
 import { useDockMagnification } from './useDockMagnification';
 
 export const chapters = [
   { id: 'overview', label: '活动概况', icon: Home },
   { id: 'sources', label: '资料与确认', icon: FileText },
   { id: 'schedule', label: '方案与议程', icon: Calendar },
-  { id: 'prep', label: '筹备与协作', icon: Layers, subsections: [{ id: 'external', label: '外部协作' }] },
+  { id: 'prep', label: '筹备与协作', icon: ClipboardList, subsections: [{ id: 'external', label: '外部协作' }] },
   { id: 'registration', label: '报名与发布', icon: Ticket,
     subsections: [{ id: 'materials', label: '材料与沟通' }, { id: 'change', label: '变更单' }] },
   { id: 'live', label: '现场执行', icon: Monitor },
@@ -92,15 +93,13 @@ export function ActivityDirectory({ id, page, mobile, navigate, agentOpen, toggl
     <nav ref={directory} id={id} popover={mobile ? 'auto' : undefined} className="chapter-directory" aria-label="活动目录">
       <div className="directory-heading">
         <h2>活动目录</h2>
-        {mobile && <button type="button" className="icon-button" aria-label="关闭活动目录" popoverTarget={id} popoverTargetAction="hide">
-          <X size={18} aria-hidden="true" />
-        </button>}
+        {mobile && <IconButton label="关闭活动目录" icon={X} variant="ghost" popoverTarget={id} popoverTargetAction="hide" />}
       </div>
       <div className="directory-links">
         {chapters.map(({ id: chapterId, label, icon: Icon, subsections }) => <div key={chapterId}>
           <a href={'#/' + chapterId} aria-current={current === chapterId ? 'location' : undefined}
             data-active-group={subsections?.some(section => section.id === current) || undefined}
-            onClick={event => openSection(event, chapterId)}><Icon size={18} aria-hidden="true" />{label}</a>
+            onClick={event => openSection(event, chapterId)}><Icon className="directory-icon" size={18} aria-hidden="true" />{label}</a>
           {subsections?.map(section => <a className="directory-subsection" key={section.id} href={'#/' + section.id}
             aria-current={current === section.id ? 'location' : undefined}
             onClick={event => openSection(event, section.id)}>{section.label}</a>)}
@@ -112,7 +111,7 @@ export function ActivityDirectory({ id, page, mobile, navigate, agentOpen, toggl
         <DockIcon><Home size={20} aria-hidden="true" /></DockIcon><span>概况</span>
       </a>
       <button type="button" className="mobile-nav-menu" aria-label="活动目录" popoverTarget={id}>
-        <DockIcon><List size={20} aria-hidden="true" /></DockIcon><span>目录</span>
+        <DockIcon><LayoutList size={20} aria-hidden="true" /></DockIcon><span>目录</span>
       </button>
       <a href="#/live" aria-current={current === 'live' ? 'location' : undefined} onClick={event => openSection(event, 'live')}>
         <DockIcon><Monitor size={20} aria-hidden="true" /></DockIcon><span>现场</span>

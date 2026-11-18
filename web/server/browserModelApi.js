@@ -1,10 +1,10 @@
-import { isLocalRequest, readBody, sendJson } from './localApi.js';
+import { isWorkbenchRequest, readBody, sendJson } from './localApi.js';
 import { connectionFrom, testConnection, testOrganization } from './modelSettings.js';
 
 export function createBrowserModelTest() {
   let active = 0;
   return async (request, response) => {
-    if (!isLocalRequest(request)) return sendJson(response, 403, { error: '模型测试仅供本机工作台访问。' });
+    if (!isWorkbenchRequest(request)) return sendJson(response, 403, { error: '模型测试仅供本机工作台访问。' });
     if (request.method !== 'POST') return sendJson(response, 405, { error: '模型测试仅接受 POST。' });
     if (request.headers['content-type']?.split(';', 1)[0] !== 'application/json') return sendJson(response, 415, { error: '请以 JSON 提交模型配置。' });
     if (active >= 2) return sendJson(response, 429, { error: '模型连接正在测试，请稍候。' });
@@ -19,6 +19,7 @@ export function createBrowserModelTest() {
       if (!['chat', 'organization'].includes(input?.purpose)) return sendJson(response, 400, { error: '请选择模型用途。' });
       const { config, error } = connectionFrom(input.connection);
       if (error) return sendJson(response, 400, { error });
+      if (input.validateOnly === true) return sendJson(response, 200, { valid: true });
       const signal = AbortSignal.any([disconnect.signal, AbortSignal.timeout(60000)]);
       const failure = input.purpose === 'organization' ? await testOrganization(config, signal) : await testConnection(config, signal);
       if (disconnect.signal.aborted) return;

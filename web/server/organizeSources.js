@@ -107,15 +107,15 @@ function recordFact(groups, input, chunks) {
     ...(chunk.textRevision && { textRevision: chunk.textRevision }) });
 }
 
-export async function organizeSources(config, snapshot, isCurrent, signal) {
-  const groups = new Map();
+export async function organizeSources(config, snapshot, isCurrent, signal, previousFacts = []) {
+  const groups = new Map(structuredClone(previousFacts).map(fact => [fact.key, fact]));
   let covered = 0;
-  let failed = 0;
+  const failedChunkIds = [];
   const unstructured = [];
   for (const chunk of snapshot.chunks) {
     const facts = tableFacts(chunk);
     if (facts === null) {
-      if (unstructured.length < 280) unstructured.push(chunk);
+      unstructured.push(chunk);
       continue;
     }
     const evidence = new Map([[chunk.chunkId, chunk]]);
@@ -135,16 +135,17 @@ export async function organizeSources(config, snapshot, isCurrent, signal) {
       });
       const facts = result?.calls?.filter(call => call.name === 'record_import_facts').flatMap(call => call.args?.facts ?? []);
       if (!facts || !result.calls.some(call => call.name === 'record_import_facts' && Array.isArray(call.args?.facts))) {
-        failed += batch.length;
+        failedChunkIds.push(...batch.map(chunk => chunk.chunkId));
         continue;
       }
       const evidence = new Map(batch.map(chunk => [chunk.chunkId, chunk]));
       for (const fact of facts) recordFact(groups, fact, evidence);
       covered += batch.length;
     } catch {
-      failed += batch.length;
+      failedChunkIds.push(...batch.map(chunk => chunk.chunkId));
     }
   }
   if (!isCurrent()) return null;
-  return { facts: [...groups.values()], covered, local, failed, total: snapshot.total, model: config?.model };
+  return { facts: [...groups.values()], covered, local, failed: failedChunkIds.length, failedChunkIds,
+    total: snapshot.total, model: config?.model };
 }
