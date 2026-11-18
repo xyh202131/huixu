@@ -33,21 +33,32 @@ function makeAgenda(type) {
 
 export function newEvent({ title, type, date, capacity }, id = uid()) {
   return {
-    id, title, type, date, capacity, version: 0, venue: '场地待确认', agenda: makeAgenda(type),
+    id, title, type, date, capacity, version: 0, venue: '场地待确认', agenda: [], rooms: [], tasks: [],
+    files: [], issues: [], attendees: [], replies: [], actual: {}, checkins: [], history: [], messages: [],
+    change: null, budget: 0, quotes: [], formOpen: false, onsite: false, isSample: false,
+  };
+}
+
+export function manualPlan(event) {
+  return { id: uid(), manual: true, topicPlan: true, event: { title: event.title, date: event.date, target: String(event.capacity ?? '') },
+    agenda: [], tasks: [], roles: [], supplies: [], venues: [], roster: [], budgetItems: [] };
+}
+
+export function exampleEvent(details, id) {
+  const event = newEvent(details, id);
+  return {
+    ...event, isSample: true, formOpen: true, agenda: makeAgenda(event.type),
     rooms: [
-      { id: 'A', capacity: capacity, ready: '08:00', equipment: ['投影', '无线麦克风'] },
+      { id: 'A', capacity: event.capacity, ready: '08:00', equipment: ['投影', '无线麦克风'] },
       { id: 'B', capacity: 60, ready: '08:00', equipment: ['投影'] },
       { id: 'C', capacity: 90, ready: '08:00', equipment: ['投影', '无线麦克风'] },
     ],
     tasks: taskNames.map((name, index) => ({ id: index + 1, name, owner: '待分配', offset: Math.min(21, 23 - index * 2), done: false })),
-    files: [], issues: [], attendees: [], replies: [], actual: {}, checkins: [], history: [], messages: [],
-    change: null, budget: 0, quotes: [], formOpen: true, onsite: false, isSample: false,
   };
 }
 
 export function initialEvents() {
-  const forum = newEvent({ title: '2026 城市创新论坛', type: '行业论坛', date: '2026-11-28', capacity: 150 }, 'forum');
-  forum.isSample = true;
+  const forum = exampleEvent({ title: '2026 城市创新论坛', type: '行业论坛', date: '2026-11-28', capacity: 150 }, 'forum');
   forum.version = 1;
   forum.venue = '虹桥会议中心';
   forum.rooms[2].ready = '14:20';
@@ -73,7 +84,7 @@ export function initialEvents() {
   const samples = [
     ['training', '新员工协作训练营', '企业培训', 48], ['expo', '城市设计作品展', '展览', 120],
     ['market', '周末创意市集', '市集', 100], ['campus', '校园社团开放日', '校园活动', 80],
-  ].map(([id, title, type, capacity]) => newEvent({ title, type, date: '', capacity }, id));
+  ].map(([id, title, type, capacity]) => exampleEvent({ title, type, date: '', capacity }, id));
   return [forum, ...samples];
 }
 

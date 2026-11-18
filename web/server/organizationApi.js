@@ -1,16 +1,29 @@
-import { isLocalRequest, sendJson } from './localApi.js';
+import { isLocalRequest, readBody, sendJson } from './localApi.js';
 import { organizeSources } from './organizeSources.js';
+import { browserConnectionFrom } from './modelSettings.js';
 
 export function createOrganizationHandler(getModelConfig, memory) {
   const running = new Map();
 
-  return async (request, response) => {
+  return async (request, response, user) => {
     if (!isLocalRequest(request)) return sendJson(response, 403, { error: '智能整理仅供本机工作台访问。' });
     const eventId = new URL(request.url, 'http://localhost').searchParams.get('event');
     if (!/^[\w-]{1,128}$/.test(eventId ?? '')) return sendJson(response, 400, { error: '请指定有效的活动。' });
     if (!['GET', 'POST'].includes(request.method)) return sendJson(response, 405, { error: '不支持此操作。' });
 
     try {
+      let browserConfig;
+      if (request.method === 'POST' && request.headers['content-type']?.split(';', 1)[0] === 'application/json') {
+        const body = await readBody(request, 12 * 1024);
+        if (!body) return sendJson(response, 413, { error: '模型配置过长。' });
+        let input;
+        try { input = JSON.parse(body.toString('utf8')); } catch { return sendJson(response, 400, { error: '模型配置格式无效。' }); }
+        if (input?.connection !== undefined) {
+          const result = browserConnectionFrom(input.connection, user);
+          if (result.error) return sendJson(response, 400, { error: result.error });
+          browserConfig = result.config;
+        }
+      }
       const scope = memory.organizationScope(eventId);
       const review = memory.readOrganization(eventId, scope.revision);
       const state = { excluded: scope.excluded, unparsed: scope.unparsed, total: scope.total, review };
@@ -22,7 +35,7 @@ export function createOrganizationHandler(getModelConfig, memory) {
       if (review && !review.failed) return sendJson(response, 200, { ...state, status: 'ready' });
       let job = running.get(eventId);
       if (job?.revision !== scope.revision) {
-        const config = getModelConfig();
+        const config = browserConfig ?? getModelConfig();
         if (!config) return sendJson(response, 503, { error: '资料已建立本机索引。请在右上角配置资料整理或 Agent 对话模型后重试。' });
         const snapshot = memory.organizationInput(eventId, scope);
         const isCurrent = () => memory.organizationScope(eventId).revision === scope.revision;

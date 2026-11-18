@@ -4,14 +4,43 @@ import { createServer } from 'node:http';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { test } from 'node:test';
-import { newEvent, participantCount } from '../src/model.js';
+import { exampleEvent, participantCount } from '../src/model.js';
 import { signupSnapshot } from '../src/registrationRules.js';
-import { registrationOwnerApi, registrationPublicApi } from './registrationApi.js';
+import { guestUploadLimiter, registrationOwnerApi, registrationPublicApi } from './registrationApi.js';
 import { createRegistrationMail } from './registrationMail.js';
 import { createRegistrationStore } from './registrationStore.js';
 
 const owner = 'fixture-owner';
 const eventId = 'fixture-forum';
+
+test('嘉宾上传中断后下一份课件仍可提交', async () => {
+  const handle = registrationPublicApi({ guests: { view: () => ({}), submit: () => ({ saved: true }) } }, '');
+  const request = { url: '/guest', method: 'POST', socket: { remoteAddress: '127.0.0.1' },
+    headers: { host: 'localhost', 'x-huixu-confirmation': 'fixture', 'x-huixu-submission': '%7B%7D' } };
+  const response = { setHeader() {}, writeHead(status) { this.status = status; }, end() {} };
+  for (let index = 0; index < 4; index++) {
+    const cancelled = { ...request, async *iterator() { throw new Error('测试上传已取消'); } };
+    await handle(cancelled, response);
+    assert.equal(response.status, 500);
+  }
+  await handle({ ...request, async *iterator() { yield Buffer.from('sample'); } }, response);
+  assert.equal(response.status, 200);
+});
+
+test('嘉宾提交配额按链接、来源及同时在途的份数独立计算，到期恢复', () => {
+  let time = 0;
+  const reserve = guestUploadLimiter(() => time);
+  const active = Array.from({ length: 4 }, (_, i) => reserve('link-' + i, 'shared'));
+  assert.throws(() => reserve('other', 'elsewhere'), { status: 429 });
+  active.forEach(release => release());
+  for (let i = 0; i < 11; i++) reserve('link-0', 'shared')();
+  assert.throws(() => reserve('link-0', 'elsewhere'), { status: 429 });
+  for (let i = 15; i < 60; i++) reserve('another-' + i, 'shared')();
+  assert.throws(() => reserve('new', 'shared'), { status: 429 });
+  reserve('new', 'elsewhere')();
+  time += 60000;
+  reserve('link-0', 'shared')();
+});
 
 async function fixture(t) {
   const directory = await mkdtemp(join(tmpdir(), 'huixu-registration-test-'));
@@ -24,7 +53,7 @@ async function fixture(t) {
     return store;
   }
   const store = open();
-  const event = newEvent({ title: '测试论坛', type: '行业论坛', date: '2026-12-03', capacity: 3 }, eventId);
+  const event = exampleEvent({ title: '测试论坛', type: '行业论坛', date: '2026-12-03', capacity: 3 }, eventId);
   event.rooms[0].capacity = 1;
   event.version = 1;
   store.open(owner, signupSnapshot(event));
@@ -66,6 +95,35 @@ test('报名保存后跨连接可读，竞争同一分场时只保留一个名�
   assert.equal(store.checkIn(owner, eventId, { code: first.id, sessionId: 'session-1' }).duplicate, false);
   assert.equal(other.checkIn(owner, eventId, { code: first.id, sessionId: 'session-1' }).duplicate, true);
   assert.equal(other.get(owner, eventId).checkins[0].personId, first.id);
+});
+
+test('历史签到跨连接可见，保留原签到点并可在补齐报名后重试', async t => {
+  const { store, open } = await fixture(t);
+  const person = add(store, '历史签到演练', { status: '已取消', sessionId: 'session-2' });
+  const records = [
+    { personId: person.id.toLowerCase(), sessionId: '' },
+    { personId: person.id, sessionId: 'session-1' },
+    { personId: 'P-LEGACY', sessionId: 'old-session' },
+  ];
+  const api = registrationOwnerApi(store, createRegistrationMail(store, {}));
+  const origin = await listen(t, (request, response) => api(request, response, { id: owner }));
+  const migrate = () => fetch(origin + '/events/' + eventId + '/checkins/migrate', {
+    method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ records }),
+  }).then(async response => { assert.equal(response.status, 200); return response.json(); });
+  const first = await migrate();
+  const other = open();
+  assert.deepEqual(other.get(owner, eventId).checkins.map(record => ({ ...record })), [
+    { personId: person.id, sessionId: '' }, { personId: person.id, sessionId: 'session-1' },
+  ]);
+  assert.equal((await migrate()).revision, first.revision);
+  assert.equal(other.checkIn(owner, eventId, { code: person.id, sessionId: 'session-1' }).duplicate, true);
+
+  const rows = [{ name: '补录演练报名', id: 'P-LEGACY' }];
+  const preview = other.importPeople(owner, eventId, rows);
+  other.importPeople(owner, eventId, rows, preview.previewKey);
+  const afterImport = await migrate();
+  assert.deepEqual(afterImport.checkins.at(-1), records.at(-1));
+  assert.equal(other.get(owner, eventId).checkins.length, 3);
 });
 
 test('匿名确认只操作绑定的报名，重复提交、撤销、过期及名额释放', async t => {

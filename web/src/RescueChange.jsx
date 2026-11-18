@@ -82,6 +82,7 @@ export function ActiveRescue({ event, change, readOnly, stale, prepareRescue, re
   const [busy, setBusy] = useState(false);
   const [problem, setProblem] = useState('');
   const { analysis } = change;
+  const invalidated = change.invalidatedSelection;
   const option = analysis.plans[selected];
   const time = timeRange({ start: analysis.incident.at, end: analysis.incident.until });
   return <>
@@ -98,6 +99,13 @@ export function ActiveRescue({ event, change, readOnly, stale, prepareRescue, re
         <ul>{analysis.unchanged.map(item => <li key={item.id}>{item.title} · {roomLabel(item.room)} · {timeRange(item)}</li>)}</ul>
       </details>}
       <RescueBlockers analysis={analysis} />
+      {invalidated && <Notice tone="warning" announce>
+        <strong>{option ? '原选方案已失效，已另选备选。' : '原选方案已失效，请核对冲突后另选一套备选。'}</strong>
+        <ul className="plain-list">{invalidated.moves.map(move => <li key={move.sessionId}>
+          {event.agenda.find(item => item.id === move.sessionId)?.title ?? move.sessionId} · {roomLabel(move.room)} · {timeRange(move)}
+        </li>)}</ul>
+        <ul className="plain-list">{invalidated.issues.map(issue => <li key={issue}>{issue}</li>)}</ul>
+      </Notice>}
       {analysis.plans.length > 0 && <div className="selection-list" aria-label="整场备选方案">{analysis.plans.map((plan, index) =>
         <button type="button" key={plan.proof} aria-pressed={selected === index} onClick={() => setSelected(index)}>
           <span className="radio-mark" aria-hidden="true" /><strong>{index === 0 ? '推荐方案' : '备选 ' + index}</strong>
@@ -106,7 +114,7 @@ export function ActiveRescue({ event, change, readOnly, stale, prepareRescue, re
         </button>)}</div>}
       {!readOnly && <details className="import-review-detail" open={!option || stale || undefined}>
         <summary>{stale ? '按最新状态重新计算' : '调整事件条件'}</summary>
-        <RescueIncidentForm event={event} incident={analysis.incident} onPrepare={input => prepareRescue(input, change)} />
+        <RescueIncidentForm event={event} incident={analysis.incident} onPrepare={input => prepareRescue(input, change, option ?? invalidated)} />
       </details>}
     </Panel>
     {option && <>

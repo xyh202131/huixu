@@ -8,18 +8,25 @@ import { Tabs } from './components';
 import { TopicPlanForm } from './TopicPlanForm';
 import { Select } from './Select';
 import { askModel } from './agentClient';
+import { rememberTurn } from './agentConversation';
+import { describeRescueImpact } from './changeImpact';
 import { importSource, organizationRequest, sourceAccept } from './memoryClient';
 import { Overview } from './Overview';
 import { ModelSettings } from './ModelSettings';
+import { WorkspaceDraftDialog } from './WorkspaceDraftDialog';
+import { TeamBoard } from './TeamBoard';
+import { draftChanged, restoreWorkspaceDraft } from './workspaceDraft';
 import { ChangePage, Schedule, Sources } from './Plan';
 import { External, ExternalForm, Preparation } from './PrepExternal';
+import { GuestConfirmation } from './GuestCollaboration';
+import { TaskHandoff } from './TaskHandoff';
 import { Materials, PublicEvent, Registration } from './Attendees';
 import { AttendancePage, PublishedEvent } from './RegistrationPublic';
 import { ownerRegistration, useRegistrationWorkspace } from './registrationClient';
 import { rescueOperations, signupSnapshot } from './registrationRules';
-import { rescueSummary, rescueTitle } from './rescueScheduling';
+import { analyzeRescue, rescueSummary, rescueTitle, validateRescuePlan } from './rescueScheduling';
 import { Live, Review } from './LiveReview';
-import { activityTypes, externalRoles, initialEvents, loadEvents, makeMoveChange, newEvent, planFromText, publishChange, uid } from './model';
+import { activityTypes, externalRoles, initialEvents, loadEvents, makeMoveChange, manualPlan, minutes, newEvent, planFromText, publishChange, uid } from './model';
 
 const views = { overview: Overview, sources: Sources, schedule: Schedule, prep: Preparation, external: External,
   registration: Registration, materials: Materials, change: ChangePage, live: Live, review: Review };
@@ -65,13 +72,13 @@ function ActivitySections(props) {
   });
 }
 
-function CreateEvent({ draft, events, create, close }) {
+function CreateEvent({ draft, events, create, close, ownerId }) {
   const defaults = draft?.proposal ?? planFromText(draft?.text ?? '', '行业论坛');
   const importMode = Boolean(draft?.importMode);
   const [mode, setMode] = useState(draft?.proposal || importMode ? '手动创建' : '从主题生成');
   return <Dialog title={importMode ? '导入活动项目' : '新建活动'} close={close}>
     {!importMode && <div className="create-event-tabs"><Tabs label="创建方式" items={['从主题生成', '手动创建']} value={mode} onChange={setMode} /></div>}
-    {mode === '从主题生成' ? <TopicPlanForm events={events} initialTopic={draft?.text} create={create} /> :
+    {mode === '从主题生成' ? <TopicPlanForm events={events} initialTopic={draft?.text} create={create} ownerId={ownerId} /> :
     <form className="form-stack" onSubmit={e => {
       e.preventDefault();
       const form = new FormData(e.currentTarget);
@@ -83,7 +90,9 @@ function CreateEvent({ draft, events, create, close }) {
       const hasNumber = suggested && /\d+\s*(?:人|位)/.test(description);
       const capacity = hasNumber ? suggested.capacity : Number(form.get('capacity'));
       if (capacity < 1 || capacity > 100000) return;
-      create(newEvent({ title, type, capacity, date: form.get('date') }), files, form.get('agentAccess') === 'on');
+      const next = newEvent({ title, type, capacity, date: form.get('date') });
+      if (!files.length) next.organizedPlan = manualPlan(next);
+      create(next, files, form.get('agentAccess') === 'on');
     }}>
       <label>用一句话描述活动<textarea name="description" defaultValue={draft?.text?.slice(0, 200)} maxLength="200" placeholder="例如：我想办一场 150 人的论坛" /></label>
       <label>活动名称<input name="title" defaultValue={draft?.proposal?.title} maxLength="50" placeholder="可选，留空时生成名称" /></label>
@@ -106,6 +115,8 @@ export function App() {
   const route = useRoute();
   const [path, id] = route;
   if (path === 'attendance') return <AttendancePage key={id} token={id} />;
+  if (path === 'guest') return <GuestConfirmation key={id} token={id} />;
+  if (path === 'tasks') return <TaskHandoff key={id} token={id} />;
   if (path === 'public') return <PublishedEvent key={id} publicId={id} />;
   return <WorkspaceApp route={route} />;
 }
@@ -127,6 +138,7 @@ function Workbench({ route, auth, useStoredEvents }) {
   const [modal, setModal] = useState('');
   const [draft, setDraft] = useState(null);
   const [agentRun, setAgentRun] = useState(null);
+  const conversation = useRef(new Map());
   const [agentDockOpen, setAgentDockOpen] = useState(true);
   const [agentDrawerOpen, setAgentDrawerOpen] = useState(false);
   const directoryId = useId();
@@ -144,6 +156,7 @@ function Workbench({ route, auth, useStoredEvents }) {
   const [toast, setToast] = useState(null);
   const toastId = useRef(0);
   const pendingJump = useRef(null);
+  const sourceReturn = useRef(null);
   const [path, routeEventId, role] = route;
   const page = Object.hasOwn(views, path) ? path : 'overview';
   const chapter = chapterFor(page);
@@ -153,13 +166,17 @@ function Workbench({ route, auth, useStoredEvents }) {
   const localEvent = events.find(item => item.id === (externalRoute || publicRoute ? routeEventId : activeId)) ?? events[0];
   const registration = useRegistrationWorkspace(Boolean(account), localEvent);
   const shared = registration.current;
-  let event = localEvent;
+  let event = account ? { ...localEvent, checkins: shared?.checkins ?? [] } : localEvent;
   if (shared) {
-    const checkins = new Map([...localEvent.checkins, ...shared.checkins].map(entry => [JSON.stringify([entry.personId, entry.sessionId]), entry]));
-    event = { ...localEvent, attendees: shared.people, formOpen: shared.event.formOpen, checkins: [...checkins.values()] };
+    event = { ...event, attendees: shared.people, formOpen: shared.event.formOpen };
+    const received = new Set((shared.guestRequests ?? []).filter(item => item.taskId && item.filename).map(item => item.taskId));
+    if (received.size) event.tasks = event.tasks.map(task => received.has(String(task.id)) ? { ...task, done: true } : task);
     if (shared.operations) {
       const actual = { ...localEvent.actual, ...shared.operations.actual };
-      const replies = new Map([...shared.operations.replies, ...localEvent.replies].map(reply => [reply.id, reply]));
+      const replies = new Map(shared.operations.replies.map(reply => [reply.id, reply]));
+      for (const reply of localEvent.replies) {
+        if (!replies.get(reply.id)?.guestConfirmed) replies.set(reply.id, reply);
+      }
       event = { ...event, actual, replies: [...replies.values()], onsite: event.onsite || Object.values(actual).some(item => item.started) };
     }
     if (shared.event.version > 0 && shared.event.version >= localEvent.version) {
@@ -184,6 +201,18 @@ function Workbench({ route, auth, useStoredEvents }) {
   const pageTitle = showExternal || showPublic ? event.title : externalRoute || publicRoute ? '活动链接不可用' : pageLabel;
 
   useEffect(() => {
+    const remote = shared?.workspaceRevision ?? 0;
+    if (!account || localEvent.draftRevision == null || localEvent.draftDirty || remote <= localEvent.draftRevision) return;
+    const request = new AbortController();
+    ownerRegistration('/' + localEvent.id + '/draft', 'GET', undefined, request.signal).then(saved => {
+      if (request.signal.aborted || !saved.data) return;
+      setEvents(list => list.map(item => item.id === localEvent.id && !item.draftDirty && saved.revision > item.draftRevision
+        ? restoreWorkspaceDraft(item, saved) : item));
+    }).catch(error => { if (!request.signal.aborted) notify(error.message); });
+    return () => request.abort();
+  }, [account?.id, shared?.workspaceRevision, localEvent.id, localEvent.draftRevision, localEvent.draftDirty]);
+
+  useEffect(() => {
     if (!useStoredEvents) return;
     try {
       localStorage.setItem('huixu.events.2', JSON.stringify(events));
@@ -205,10 +234,10 @@ function Workbench({ route, auth, useStoredEvents }) {
       setEvents(current => {
         const loaded = saved.filter(item => !current.some(local => local.id === item.id));
         if (!loaded.length) return current;
-        return [...current, ...loaded.map(item => ({
-          ...newEvent(item, item.id), ...item, tasks: [],
-          agenda: item.agenda.map(session => ({ guest: '待确认', equipment: [], ...session })),
-        }))];
+        return [...current, ...loaded.map(({ savedDraft, ...item }) => {
+          const local = { ...newEvent(item, item.id), ...item };
+          return savedDraft ? restoreWorkspaceDraft(local, savedDraft) : local;
+        })];
       });
     }).catch(() => {});
     return () => controller.abort();
@@ -226,6 +255,21 @@ function Workbench({ route, auth, useStoredEvents }) {
   useEffect(() => {
     const jump = pendingJump.current?.destination === location.hash ? pendingJump.current : null;
     pendingJump.current = null;
+    const origin = sourceReturn.current;
+    if (origin && origin.eventId !== event?.id) sourceReturn.current = null;
+    if (origin?.eventId === event?.id && origin.hash === (location.hash || '#/overview')) {
+      sourceReturn.current = null;
+      const frame = requestAnimationFrame(() => {
+        window.scrollTo({ top: origin.y, behavior: 'instant' });
+        if (origin.agentOpen) setAgentDrawerOpen(true);
+        if (origin.onReturn) origin.onReturn();
+        else requestAnimationFrame(() => {
+          const target = origin.element?.isConnected ? origin.element : document.getElementById(origin.elementId);
+          target?.focus({ preventScroll: true });
+        });
+      });
+      return () => cancelAnimationFrame(frame);
+    }
     if (jump?.preserveScroll) return;
     const frame = requestAnimationFrame(() => {
       if (publicRoute || externalRoute || !path) window.scrollTo(0, 0);
@@ -234,7 +278,7 @@ function Workbench({ route, auth, useStoredEvents }) {
     return () => cancelAnimationFrame(frame);
   }, [route, event?.id, externalRoute, publicRoute]);
   useEffect(() => {
-    setAgentRun(null);
+    setAgentRun(conversation.current.get(event?.id)?.at(-1) ?? null);
     return () => agentRequest.current?.abort();
   }, [event?.id, publicRoute, externalRoute]);
 
@@ -244,7 +288,15 @@ function Workbench({ route, auth, useStoredEvents }) {
     setToast({ id: toastId.current, text: message });
   }
 
-  function navigate(id, { preserveScroll = false } = {}) {
+  function navigate(id, { preserveScroll = false, onReturn, returnFocus, returnLabel } = {}) {
+    // 原文只是一段临时查看路径，保留进入前的位置、抽屉与未保存的编辑上下文。
+    if (/^sources\/\d+$/.test(id) && !/^#\/sources\/\d+$/.test(location.hash)) {
+      const element = returnFocus ?? document.activeElement;
+      sourceReturn.current = { hash: location.hash || '#/overview', y: window.scrollY, element, elementId: element?.id,
+        eventId: event.id, agentOpen: agentDrawerOpen, onReturn, label: returnLabel ?? (agentDrawerOpen || element?.closest('.activity-agent') ? '返回 Agent 引用' : '返回查看位置') };
+    } else if (!/^sources\/\d+$/.test(id) && '#/' + id !== sourceReturn.current?.hash) {
+      sourceReturn.current = null;
+    }
     setModal('');
     setAgentDrawerOpen(false);
     const destination = '#/' + id;
@@ -254,6 +306,9 @@ function Workbench({ route, auth, useStoredEvents }) {
     }
     pendingJump.current = { destination, preserveScroll };
     location.hash = destination;
+  }
+  function closeSource() {
+    navigate((sourceReturn.current?.hash ?? '#/sources').replace(/^#\/?/, ''), { preserveScroll: true });
   }
   function showModal(name) {
     setAgentDrawerOpen(false);
@@ -285,9 +340,14 @@ function Workbench({ route, auth, useStoredEvents }) {
     if (useStoredEvents) sessionStorage.setItem('huixu.active', id);
     navigate(destination);
   }
-  function update(transform) {
-    if (readOnly) return;
-    setEvents(current => current.map(item => item.id === event.id ? transform(item) : item));
+  function update(transform, { syncing = false } = {}) {
+    // 访客可预览 Agent 草稿，持久化仍由登录后的活动存储流程负责。
+    setEvents(current => current.map(item => {
+      if (item.id !== event.id) return item;
+      const next = transform(item);
+      if (syncing || item.draftRevision == null || !draftChanged(item, next)) return next;
+      return { ...next, draftDirty: true };
+    }));
   }
   function openChange(change) {
     update(current => ({
@@ -311,20 +371,43 @@ function Workbench({ route, auth, useStoredEvents }) {
     return true;
   }
   async function prepareRescue(incident, previous, preferred) {
+    if (!account) {
+      const analysis = analyzeRescue(event, incident);
+      if (analysis.error) throw new Error(analysis.error);
+      const issues = preferred ? validateRescuePlan(event, analysis.incident, preferred) : [];
+      let preferredIndex = 0;
+      if (preferred && !issues.length) {
+        preferredIndex = analysis.plans.findIndex(plan => JSON.stringify(plan.moves) === JSON.stringify(preferred.moves));
+        if (preferredIndex === -1) {
+          analysis.plans.push(preferred);
+          preferredIndex = analysis.plans.length - 1;
+        }
+      }
+      analysis.plans = analysis.plans.map(plan => ({ ...plan, proof: JSON.stringify(plan.moves), impact: describeRescueImpact(event, plan) }));
+      openChange({ id: previous?.id ?? uid(), kind: 'rescue', title: rescueTitle(analysis.incident),
+        reason: rescueSummary(analysis), analysis, version: event.version, operationsKey: JSON.stringify(rescueOperations(event)),
+        preferredIndex: issues.length ? -1 : preferredIndex, invalidatedSelection: issues.length ? { moves: preferred.moves, issues } : null });
+      return;
+    }
     if (!account || !shared) throw new Error('活动服务正在读取议程，请稍后重试。');
     const operations = rescueOperations(event);
     const result = await registration.change('/rescue/preview', 'POST', {
-      revision: shared.revision, incident, operations,
+      revision: shared.revision, incident, operations, preferredMoves: preferred?.moves,
     });
-    const { analysis, state } = result;
-    const preferredIndex = preferred ? analysis.plans.findIndex(plan => JSON.stringify(plan.moves) === JSON.stringify(preferred.moves)) : -1;
+    const { analysis, state, preferredIndex, invalidatedSelection } = result;
     const change = { id: previous?.id ?? uid(), kind: 'rescue', title: rescueTitle(analysis.incident),
       reason: rescueSummary(analysis), analysis, revision: state.revision, version: state.event.version,
-      operationsKey: JSON.stringify(operations), preferredIndex: Math.max(0, preferredIndex) };
+      operationsKey: JSON.stringify(operations), preferredIndex, invalidatedSelection };
     if (previous) update(current => current.change?.id === previous.id ? { ...current, change } : current);
     else openChange(change);
-    setAgentRun({ eventId: event.id, question: change.title, answer: change.reason,
-      evidence: { title: event.title, version: change.version }, reviewChangeId: change.id });
+    const run = { eventId: event.id, question: change.title, answer: change.reason,
+      evidence: { title: event.title, version: change.version }, reviewChangeId: change.id };
+    const context = rememberTurn(event, change.title, { ...run, proposal: { kind: 'rescue', analysis } });
+    context.selected = preferredIndex >= 0 ? preferredIndex + 1 : undefined;
+    run.context = context;
+    const turns = (conversation.current.get(event.id) ?? []).filter(item => item.reviewChangeId !== change.id);
+    conversation.current.set(event.id, [...turns, run].slice(-4));
+    setAgentRun(run);
   }
   async function releaseRescue(change, option) {
     if (!account || !shared) throw new Error('活动服务暂不可用。');
@@ -337,13 +420,11 @@ function Workbench({ route, auth, useStoredEvents }) {
     navigate('change/released/' + change.id);
   }
   function refreshMoveChange() {
-    update(current => {
-      const change = current.change;
-      const session = current.agenda.find(item => item.id === change?.sessionId);
-      if (!session || !change.moveRequest) return current;
-      const refreshed = makeMoveChange(current, session, change.moveRequest, change.reason);
-      return { ...current, change: { ...refreshed, id: change.id } };
-    });
+    const change = event.change;
+    const session = event.agenda.find(item => item.id === change?.sessionId);
+    if (!session || !change.moveRequest) return;
+    const refreshed = makeMoveChange(event, session, change.moveRequest, change.reason);
+    update(current => current.change?.id === change.id ? { ...current, change: { ...refreshed, id: change.id } } : current);
   }
   async function organize(eventId, run = true) {
     const token = (organizationRequests.current[eventId] ?? 0) + 1;
@@ -351,7 +432,7 @@ function Workbench({ route, auth, useStoredEvents }) {
     setOrganizationRuns(current => ({ ...current, [eventId]: { token, pending: run } }));
     if (!run) return;
     try {
-      await organizationRequest(eventId, 'POST');
+      await organizationRequest(eventId, 'POST', undefined, account?.id);
       if (organizationRequests.current[eventId] === token) {
         setOrganizationRuns(current => ({ ...current, [eventId]: { token, pending: false } }));
       }
@@ -361,7 +442,7 @@ function Workbench({ route, auth, useStoredEvents }) {
       }
     }
   }
-  async function importFiles(eventId, files, agentAccess) {
+  async function importFiles(eventId, files, agentAccess, replacementId) {
     if (!files.length || importingEvents.current.has(eventId)) return;
     importingEvents.current.add(eventId);
     let progress = {
@@ -373,7 +454,7 @@ function Workbench({ route, auth, useStoredEvents }) {
       for (const [index, file] of files.entries()) {
         let result;
         let outcome;
-        try { result = await importSource(eventId, file, agentAccess); } catch (error) {
+        try { result = await importSource(eventId, file, agentAccess, replacementId); } catch (error) {
           outcome = { state: '导入失败', note: error.message, tone: 'rose' };
           progress = { ...progress, errors: [...progress.errors, { name: file.name, reason: error.message }] };
         }
@@ -415,8 +496,11 @@ function Workbench({ route, auth, useStoredEvents }) {
   }
   function copy() {
     const next = newEvent({ title: event.title + '（副本）', type: event.type, date: '', capacity: event.capacity });
-    next.agenda = event.agenda.map(item => ({ ...item, guest: '待确认' }));
-    next.tasks = event.tasks.map(task => ({ ...task, done: false, owner: '待分配' }));
+    next.organizedPlan = { id: uid(), manual: true, topicPlan: true, event: { title: next.title, target: String(next.capacity || '') },
+      agenda: (event.agenda.length ? event.agenda : event.organizedPlan?.agenda ?? []).map(row => ({
+        id: uid(), name: row.title ?? row.name, duration: row.start && row.end ? String(minutes(row.end) - minutes(row.start)) : row.duration })),
+      tasks: (event.tasks.length ? event.tasks : event.organizedPlan?.tasks ?? []).map(task => ({ id: uid(), name: task.name, offset: task.offset })),
+      roles: [], supplies: [], venues: [], roster: [], budgetItems: [] };
     create(next);
   }
   function askLocal(text) {
@@ -458,13 +542,29 @@ function Workbench({ route, auth, useStoredEvents }) {
     agentRequest.current = request;
     setAgentRun({ eventId: event.id, question, pending: true });
     try {
-      const result = await askModel(question, event, request.signal);
-      if (!request.signal.aborted) setAgentRun({ ...result, eventId: event.id, question });
+      const previous = conversation.current.get(event.id) ?? [];
+      const result = await askModel(question, event, request.signal, account?.id, previous.map(entry => entry.context));
+      if (!request.signal.aborted) {
+        const run = { ...result, eventId: event.id, question };
+        if (!result.error) {
+          run.context = rememberTurn(event, question, result);
+          conversation.current.set(event.id, [...previous, run].slice(-4));
+        }
+        setAgentRun(run);
+      }
     } catch (error) {
       if (!request.signal.aborted) setAgentRun({ eventId: event.id, question, error: error.message });
     } finally {
       if (agentRequest.current === request) agentRequest.current = null;
     }
+  }
+
+  function selectCandidate(number) {
+    const turns = conversation.current.get(event.id);
+    if (!agentRun?.context || turns?.at(-1) !== agentRun) return;
+    const run = { ...agentRun, context: { ...agentRun.context, selected: number } };
+    conversation.current.set(event.id, [...turns.slice(0, -1), run]);
+    setAgentRun(run);
   }
 
   function stopAgent() {
@@ -500,9 +600,11 @@ function Workbench({ route, auth, useStoredEvents }) {
 
   const sourceIssueId = path === 'sources' && routeEventId === 'issue' ? role : undefined;
   const props = { event, readOnly, mobile, update, navigate, notify, ask, openChange, publish, prepareRescue, releaseRescue,
-    refreshMoveChange, copy, activateChange, openImport, importFiles, sourceIssueId, registration,
+    refreshMoveChange, copy, activateChange, openImport, openDraft: () => showModal('draft'), importFiles, sourceIssueId, registration,
     showDesignMaterials: path === 'materials' && routeEventId === 'design',
-    importRun: importRuns[event?.id], memoryEvidenceId: path === 'sources' && routeEventId !== 'issue' ? routeEventId : undefined,
+    focusTaskId: path === 'prep' && routeEventId === 'task' ? role : '',
+    importRun: importRuns[event?.id], memoryEvidenceId: path === 'sources' && /^\d+$/.test(routeEventId) ? routeEventId : undefined,
+    closeSource, sourceReturnLabel: sourceReturn.current?.label,
     releasedChangeId: path === 'change' && routeEventId === 'released' ? role : undefined,
     organize, organizationRun: organizationRuns[event?.id] };
   if ((publicRoute || externalRoute) && !showPublic && !showExternal) return <main className="unavailable-link">
@@ -518,8 +620,8 @@ function Workbench({ route, auth, useStoredEvents }) {
               <button type="button" className="activity-brand" aria-label="会序，返回活动概况" onClick={() => navigate('overview')}>
                 <Calendar size={25} strokeWidth={1.9} aria-hidden="true" /><span>会序</span>
               </button>
-              <Select label="切换活动" compact value={event.id} onChange={select}
-                options={events.map(item => ({ value: item.id, label: item.title, detail: item.type }))} />
+              <Select label="切换活动" compact value={event.id} onChange={value => value === 'team-board' ? showModal('team') : select(value)}
+                options={[{ value: 'team-board', label: '团队活动总览' }, ...events.map(item => ({ value: item.id, label: item.title, detail: item.type }))]} />
             </div>
             <div className="activity-toolbar-actions">
               {account && <button type="button" className="button toolbar-action" aria-label="新建活动" onClick={() => { setDraft(null); showModal('create'); }}>
@@ -541,18 +643,23 @@ function Workbench({ route, auth, useStoredEvents }) {
             <ActivitySections key={event.id} {...props} />
           </main>
           <AgentWorkspace key={event.id} id={agentId} event={event} account={account} docked={dockAgent} open={agentOpen} close={closeAgent}
+            history={(conversation.current.get(event.id) ?? []).filter(turn => turn !== agentRun && turn.question !== agentRun?.question)}
+            clearHistory={() => { agentRequest.current?.abort(); conversation.current.delete(event.id); setAgentRun(null); }}
+            selectCandidate={selectCandidate}
             run={agentRun?.eventId === event.id ? agentRun : null} ask={ask} stop={stopAgent} askLocal={askLocal}
-            openSettings={() => showModal('settings')} openAccount={() => showModal('account')} reviewProposal={reviewProposal}
+            openSettings={() => showModal('settings')} reviewProposal={reviewProposal}
             openSource={chunkId => navigate(`sources/${chunkId}`)} openReviewedChange={id => navigate(id ? `change/released/${id}` : 'change')} />
         </div>
       </div>}
-    {modal === 'create' && <CreateEvent key={draft?.text ?? (draft?.importMode ? 'import' : 'new')} draft={draft} events={events} create={create} close={() => setModal('')} />}
-    {modal === 'team' && <Dialog title="活动团队" variant="drawer" close={() => setModal('')}>
-      <p className="muted">当前为本机工作台演练。以下为样例分工。</p>
-      <ul className="plain-list"><li>林澄 · 活动负责人</li><li>唐悦 · 策划与统筹</li><li>顾言 · 现场总控</li></ul>
-    </Dialog>}
+    {modal === 'create' && <CreateEvent key={draft?.text ?? (draft?.importMode ? 'import' : 'new')} draft={draft} events={events} create={create} ownerId={account?.id} close={() => setModal('')} />}
+    {modal === 'team' && <TeamBoard events={events.map(item => item.id === event.id ? event : item)} close={() => setModal('')} open={(id, target, change) => {
+      if (change) setEvents(list => list.map(item => item.id === id && item.change?.id !== change.id
+        ? { ...item, change, draftChanges: [item.change, ...(item.draftChanges ?? [])].filter(row => row && row.id !== change.id) } : item));
+      select(id, target);
+    }} />}
     {modal === 'account' && <AccountDialog {...auth} openTeam={() => setModal('team')} close={() => setModal('')} />}
-    {modal === 'settings' && <ModelSettings account={account} openAccount={() => setModal('account')} close={() => setModal('')} />}
+    {modal === 'settings' && <ModelSettings ownerId={account?.id} close={() => setModal('')} />}
+    {modal === 'draft' && account && <WorkspaceDraftDialog event={event} update={update} notify={notify} close={() => setModal('')} />}
     <Toast feedback={toast} dismiss={dismissToast} />
   </>;
 }

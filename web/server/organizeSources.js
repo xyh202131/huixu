@@ -16,7 +16,8 @@ const tools = [{ type: 'function', function: { name: 'record_import_facts', desc
 
 const tableHeaders = {
   roster: { name: ['姓名', '参会人', '嘉宾姓名', '讲者姓名', '志愿者姓名'], role: ['角色', '身份'], organization: ['单位', '所属单位', '机构', '公司'] },
-  agenda: { name: ['环节名称', '议程环节', '活动环节'], date: ['环节日期', '日期'], start: ['开始时间'], end: ['结束时间'], room: ['会场', '场地'], host: ['负责人', '讲者', '讲师'] },
+  agenda: { name: ['环节名称', '议程环节', '活动环节'], date: ['环节日期', '日期'], start: ['开始时间'], end: ['结束时间'],
+    room: ['会场', '场地'], host: ['负责人', '讲者', '讲师'], expected: ['分场预计人数'], equipment: ['环节所需设备', '所需设备'] },
   venues: { name: ['场地名称', '会场名称', '会议室名称'], capacity: ['场地容量', '容量', '可容纳人数'], address: ['地址', '场地地址'], equipment: ['设备', '场地设备'] },
   budgetItems: { name: ['费用项目', '预算项目', '报价项目'], amount: ['金额', '金额(元)', '费用', '报价', '报价(元)'] },
 };
@@ -66,7 +67,7 @@ function normalized(value, field) {
     const adjusted = period ? hour % 12 + (period === '上午' ? 0 : 12) : hour;
     return `${String(adjusted).padStart(2, '0')}:${String(minute).padStart(2, '0')}`;
   }
-  if (['target', 'capacity', 'budget', 'amount'].includes(field)) {
+  if (['target', 'capacity', 'expected', 'budget', 'amount'].includes(field)) {
     const currency = field === 'budget' || field === 'amount';
     const match = (currency ? /^(?:人民币|CNY|¥)?\s*([\d,.]+)\s*(万)?\s*(?:元|人民币)?$/i : /^([\d,]+(?:\.0+)?)\s*(万)?\s*(?:人|位|名|座|席)?$/).exec(text);
     if (!match) return '';
@@ -102,7 +103,8 @@ function recordFact(groups, input, chunks) {
   const position = chunk.text.indexOf(raw);
   const excerpt = quote && quote.length <= 450 && quote.includes(raw) && chunk.text.includes(quote) ? quote
     : chunk.text.slice(Math.max(0, position - 100), position + raw.length + 150);
-  option.evidence.push({ chunkId, name: chunk.name, revision: chunk.revision, location: chunk.location, excerpt });
+  option.evidence.push({ chunkId, name: chunk.name, revision: chunk.revision, location: chunk.location, excerpt,
+    ...(chunk.textRevision && { textRevision: chunk.textRevision }) });
 }
 
 export async function organizeSources(config, snapshot, isCurrent, signal) {

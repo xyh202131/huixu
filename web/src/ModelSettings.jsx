@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
-import { sessionExpired } from './authClient';
+import { browserModelSettings, modelInput, removeBrowserModel, saveBrowserModel, testBrowserModel } from './browserModels';
 import { Tabs } from './components';
 import { Dialog, Notice, Popconfirm } from './interactions';
 import { modelPresets } from './modelPresets';
@@ -11,19 +11,6 @@ const keyHeaders = [{ value: 'x-api-key', label: 'x-api-key' }, { value: 'bearer
 const chatLabel = 'Agent 对话';
 const organizationLabel = '资料整理';
 
-async function settingsRequest({ purpose, method = 'GET', test = false, input, signal }) {
-  const path = test ? '/api/model-settings/test' : '/api/model-settings';
-  const response = await fetch(`${path}?purpose=${purpose}`, {
-    method, signal,
-    ...(input && { headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(input) }),
-  });
-  if (response.status === 401) window.dispatchEvent(new Event(sessionExpired));
-  if (!response.headers.get('content-type')?.includes('application/json')) throw new Error('本机模型设置服务不可用。');
-  const data = await response.json();
-  if (!response.ok) throw new Error(data.error || '模型设置请求失败。');
-  return data;
-}
-
 function settingsFields(provider, saved) {
   if (provider === saved?.provider) return { ...saved, apiKey: '' };
   const preset = modelPresets[provider];
@@ -31,24 +18,23 @@ function settingsFields(provider, saved) {
     keyHeader: preset?.keyHeader ?? 'x-api-key', apiKey: '' };
 }
 
-function ModelSettingsForm({ purpose }) {
+function ModelSettingsForm({ purpose, ownerId }) {
   const [status, setStatus] = useState(null);
   const [form, setForm] = useState(() => settingsFields('openai'));
   const [busy, setBusy] = useState('load');
   const [feedback, setFeedback] = useState(null);
   const request = useRef(null);
-  const { active, source } = status ?? {};
-  const saved = source === 'workbench' ? active : null;
+  const { active, saved, shared } = status ?? {};
   const isOrganization = purpose === 'organization';
   const custom = form.provider === 'custom';
-  const keepKey = saved?.hasKey && saved.provider === form.provider && (!custom || (
+  const keepKey = saved?.apiKey && saved.provider === form.provider && (!custom || (
     saved.protocol === form.protocol && saved.baseUrl === form.baseUrl.trim() &&
     (form.protocol !== 'anthropic' || saved.keyHeader === form.keyHeader)
   ));
 
   function applyStatus(next) {
     setStatus(next);
-    const saved = next.source === 'workbench' ? next.active : null;
+    const saved = next.saved;
     setForm(settingsFields(saved?.provider ?? 'openai', saved));
   }
 
@@ -56,7 +42,7 @@ function ModelSettingsForm({ purpose }) {
     setFeedback(null);
     setBusy('load');
     try {
-      const next = await settingsRequest({ purpose, signal });
+      const next = await browserModelSettings(purpose, ownerId);
       if (!signal.aborted) applyStatus(next);
     } catch (error) {
       if (!signal.aborted) setFeedback({ tone: 'error', text: error.message });
@@ -70,7 +56,7 @@ function ModelSettingsForm({ purpose }) {
     request.current = controller;
     void load(controller.signal);
     return () => controller.abort();
-  }, [purpose]);
+  }, [purpose, ownerId]);
 
   function update(field, value) {
     setFeedback(null);
@@ -84,25 +70,27 @@ function ModelSettingsForm({ purpose }) {
     setBusy(action);
     try {
       if (action === 'remove') {
-        const next = await settingsRequest({ purpose, method: 'DELETE', signal });
+        await removeBrowserModel(purpose, ownerId);
+        const next = await browserModelSettings(purpose, ownerId);
         if (signal.aborted) return;
         applyStatus(next);
-        setFeedback({ tone: 'success', text: '工作台配置已移除。' });
+        setFeedback({ tone: 'success', text: '当前浏览器的配置已移除。' });
         return;
       }
-      const { provider, protocol, baseUrl, model, keyHeader, apiKey } = form;
       const test = action === 'test' || action === 'test-current';
-      const input = action === 'test-current' ? { useCurrent: true }
-        : { provider, protocol, baseUrl, model, keyHeader, apiKey, keyRevision: keepKey ? saved.revision : undefined };
-      const next = await settingsRequest({ purpose, method: 'POST', test, input, signal });
-      if (signal.aborted) return;
+      const input = action === 'test-current' ? active : modelInput(form, saved);
       if (test) {
+        await testBrowserModel(purpose, input, signal);
+        if (signal.aborted) return;
         const text = isOrganization ? '资料提取测试通过，两条冲突时间均有原文出处。' : '连接与工具调用测试通过。';
         setFeedback({ tone: 'success', text });
         return;
       }
+      await saveBrowserModel(purpose, input, ownerId);
+      const next = await browserModelSettings(purpose, ownerId);
+      if (signal.aborted) return;
       applyStatus(next);
-      setFeedback({ tone: 'success', text: isOrganization ? '资料整理模型已启用。' : 'Agent 对话模型已启用。' });
+      setFeedback({ tone: 'success', text: '已保存到当前浏览器并启用。' });
     } catch (error) {
       if (!signal.aborted) setFeedback({ tone: 'error', text: error.message });
     } finally {
@@ -117,15 +105,15 @@ function ModelSettingsForm({ purpose }) {
     </>}
   </>;
 
-  let activeLabel = '尚未启用模型。';
-  if (source === 'shared') activeLabel = active ? `沿用 Agent 对话模型 · ${active.model}` : '默认沿用 Agent 对话模型。当前尚未配置模型。';
+  let activeLabel = '当前浏览器尚未配置模型。';
+  if (shared) activeLabel = active ? `沿用 Agent 对话模型 · ${active.model}` : '默认沿用 Agent 对话模型。当前尚未配置模型。';
   else if (active) {
-    const sourceLabel = source === 'environment' ? '环境变量' : modelPresets[active.provider]?.label ?? '自定义接口';
-    activeLabel = `当前使用 ${sourceLabel} · ${active.model}`;
+    const sourceLabel = modelPresets[active.provider]?.label ?? '自定义接口';
+    activeLabel = `当前浏览器使用 ${sourceLabel} · ${active.model}`;
   }
   return <>
     <Notice>{activeLabel}</Notice>
-    {source === 'shared' && active && <div className="actions">
+    {shared && active && <div className="actions">
       <button type="button" className="button small" disabled={Boolean(busy)} onClick={() => submit('test-current')}>
         {busy === 'test-current' ? '正在测试…' : '测试当前整理模型'}
       </button>
@@ -150,14 +138,15 @@ function ModelSettingsForm({ purpose }) {
         <label>API Key{custom && !keepKey ? '（如接口需要）' : ''}<input type="password" autoComplete="off" spellCheck={false}
           required={!custom && !keepKey} maxLength={4096} value={form.apiKey} onChange={event => update('apiKey', event.target.value)}
           placeholder={keepKey ? '已保存，留空沿用' : '填写服务商 API Key'} /></label>
-        <p className="muted">{isOrganization ? '填写后为非结构化资料指定独立模型。测试使用演练资料核对冲突字段与原文出处。'
-          : '密钥由本机服务保存。测试使用示例问题验证工具调用和结果回传。'}</p>
+        <p className="muted">{ownerId ? '保存后，当前账号可使用此接口处理已授权的活动资料。' : '此配置仅供当前浏览器的访客使用。'} 配置和密钥保存在本浏览器，旧版配置需重新填写。</p>
+        <p className="muted">{isOrganization ? '资料整理可单独配置模型。测试使用演练资料核对冲突字段与原文出处。'
+          : '测试使用示例问题验证连接、工具调用和结果回传，可能消耗少量模型额度。'}</p>
       </fieldset>
       {feedback && <Notice tone={feedback.tone} announce>{feedback.text}</Notice>}
       <div className="actions">
         {saved && !busy && <Popconfirm label="移除配置" confirmLabel="确认移除"
-          description={isOrganization ? '移除后删除此用途的 API Key，资料整理恢复沿用 Agent 对话模型。'
-            : '移除后删除此用途的 API Key，并恢复环境变量配置（如有）。'} onConfirm={() => submit('remove')} />}
+          description={isOrganization ? '删除当前浏览器的资料整理配置，恢复沿用 Agent 对话模型。'
+            : '删除当前浏览器保存的 Agent 接口与 API Key。'} onConfirm={() => submit('remove')} />}
         <button type="submit" value="test" className="button" disabled={Boolean(busy)}>
           {busy === 'test' ? '正在测试…' : isOrganization ? '测试资料提取' : '测试连接'}
         </button>
@@ -167,16 +156,11 @@ function ModelSettingsForm({ purpose }) {
   </>;
 }
 
-export function ModelSettings({ account, openAccount, close }) {
+export function ModelSettings({ close, ownerId }) {
   const [label, setLabel] = useState(chatLabel);
   const purpose = label === organizationLabel ? 'organization' : 'chat';
-  return <Dialog title="模型设置" fullOnMobile close={close}>
-    {account ? <>
-      <Tabs label="模型用途" items={[chatLabel, organizationLabel]} value={label} onChange={setLabel} />
-      <ModelSettingsForm key={purpose} purpose={purpose} />
-    </> : <>
-      <p className="muted">登录工作台后可配置 Agent 和资料整理使用的模型。</p>
-      <div className="actions"><button type="button" className="button primary" onClick={openAccount}>前往登录</button></div>
-    </>}
+  return <Dialog title="模型设置" className="model-settings-dialog" fullOnMobile close={close}>
+    <Tabs label="模型用途" items={[chatLabel, organizationLabel]} value={label} onChange={setLabel} />
+    <ModelSettingsForm key={purpose} purpose={purpose} ownerId={ownerId} />
   </Dialog>;
 }

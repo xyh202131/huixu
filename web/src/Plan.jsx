@@ -4,22 +4,31 @@ import { Badge, Empty, IconTile, LinkButton, PageHead, Panel, Table, Tabs } from
 import { Dialog, Notice } from './interactions';
 import { Select } from './Select';
 import { ActiveRescue, ReleasedRescue } from './RescueChange';
-import { rescueOperations } from './registrationRules';
+import { rescueOperations, signupSnapshot } from './registrationRules';
 import { ProjectMemory } from './ProjectMemory';
 import { ImportReview, OrganizedPlan } from './ImportReview';
-import { checkCandidate, makeChange, money, moveCandidate, participantCount, roomLabel, timeRange } from './model';
+import { checkCandidate, makeChange, manualPlan, money, moveCandidate, participantCount, roomLabel, timeRange } from './model';
 import { changeReviewKey, describeChangeImpact } from './changeImpact';
 import { analyzeMove, checkinPoint, sameCandidate } from './scheduling';
+import { assessExecutionPlan } from './executionPlan';
 
-export function Sources({ event, readOnly, update, notify, navigate, importFiles, importRun, memoryEvidenceId, openImport, organize, organizationRun, sourceIssueId }) {
+export function Sources({ event, readOnly, mobile, update, notify, navigate, importFiles, importRun, memoryEvidenceId, closeSource, sourceReturnLabel, openImport, organize, organizationRun, sourceIssueId }) {
   const [selectedIssue, setSelectedIssue] = useState(sourceIssueId);
+  const [editingSource, setEditingSource] = useState(null);
   useEffect(() => { if (sourceIssueId) setSelectedIssue(sourceIssueId); }, [sourceIssueId]);
   const issue = event.issues.find(item => item.id === (sourceIssueId ?? selectedIssue)) ?? event.issues.find(item => !item.resolved) ?? event.issues[0];
-  function confirm(value) {
+  const editingIssue = editingSource?.kind === 'issue';
+  let editingStatus = editingSource?.status ?? editingSource?.record.reviewStatus ?? '待核对';
+  if (editingIssue && editingSource.status === undefined && editingSource.record.resolved) editingStatus = '已确认';
+  let editingType = 'text';
+  if (editingSource?.record.sessionId) editingType = 'time';
+  if (editingSource?.record.id === 'budget') editingType = 'number';
+  function confirm(value, target = issue, note = '') {
+    setSelectedIssue(target.id);
     update(current => ({
       ...current,
-      budget: issue.id === 'budget' ? Number(value) : current.budget,
-      issues: current.issues.map(item => item.id === issue.id ? { ...item, resolved: value } : item),
+      budget: target.id === 'budget' && value ? Number(value) : current.budget,
+      issues: current.issues.map(item => item.id === target.id ? { ...item, resolved: value, resolutionNote: note } : item),
     }));
     notify('已保存到计划草稿');
   }
@@ -27,6 +36,7 @@ export function Sources({ event, readOnly, update, notify, navigate, importFiles
     <PageHead heading="h2" title="资料与确认" description={readOnly ? '浏览活动资料，对照有冲突的原文。' : '批量导入资料，建立活动索引，核对原文。'}>
       {!readOnly && <button className="button" onClick={openImport}>导入为新活动</button>}
     </PageHead>
+    {readOnly && <Notice>当前为示例资料，核对修改保留在本次页面中。</Notice>}
     {event.issues.length > 0 && <Panel title="资料待确认">
       <div className="selection-list">{event.issues.map(item => <button key={item.id} aria-pressed={item.id === issue?.id} onClick={() => navigate('sources/issue/' + item.id)}>
         <span>{item.title}</span><Badge tone={item.resolved ? 'success' : 'amber'}>{item.resolved ? '已确认' : '待核对'}</Badge>
@@ -37,31 +47,81 @@ export function Sources({ event, readOnly, update, notify, navigate, importFiles
         <div className="evidence-grid">{issue.choices.map(choice => <article key={choice.file} className="evidence">
           <div className="file-title"><FileText size={18} /><strong>{choice.file}</strong></div><p className="muted">{choice.location}</p>
           <blockquote>{choice.quote}</blockquote>
-          {!readOnly && <button className="button" onClick={() => confirm(choice.value)} disabled={issue.resolved === choice.value}>采用 {issue.id === 'budget' ? money(choice.value) : choice.value}</button>}
+          <button className="button" onClick={() => confirm(choice.value)} disabled={issue.resolved === choice.value}>采用 {issue.id === 'budget' ? money(choice.value) : choice.value}</button>
         </article>)}</div>
+        {issue.resolutionNote && <p className="muted">核对依据　{issue.resolutionNote}</p>}
+        <div className="actions">
+          <button className="button" type="button" onClick={() => setEditingSource({ kind: 'issue', record: issue })}>修改状态与内容</button>
+          {issue.resolved && <button className="button" type="button" onClick={() => confirm(null)}>重新标为待核对</button>}
+        </div>
         {issue.resolved && issue.sessionId && <div className="actions publish-actions">
           <LinkButton onClick={() => navigate('schedule')}>查看议程中的草稿时间</LinkButton>
         </div>}
       </Panel>
     </div>}
-    {!readOnly && <ProjectMemory eventId={event.id} importFiles={importFiles} importRun={importRun} evidenceId={memoryEvidenceId}
-      onCloseEvidence={() => navigate('sources', { preserveScroll: true })} onAccessChange={allowed => organize(event.id, allowed)}>
+    {!readOnly && <ProjectMemory eventId={event.id} mobile={mobile} importFiles={importFiles} importRun={importRun} evidenceId={memoryEvidenceId}
+      onCloseEvidence={closeSource} returnLabel={sourceReturnLabel} onAccessChange={allowed => organize(event.id, allowed)}>
       <ImportReview {...{ event, update, notify, navigate, organize, organizationRun, importRun }} />
     </ProjectMemory>}
     {event.files.length > 0 && <details className="activity-file-history">
       <summary>样例与旧资料登记（{event.files.length}）</summary>
-      <Table headers={['文件', '状态']}>{event.files.map(file => <tr key={file.id}>
-        <td>{file.name}</td><td><Badge tone={file.status.startsWith('样例') ? 'success' : 'neutral'}>{file.status}</Badge></td>
+      <Table headers={['文件', '解析状态', '核对状态', '操作']}>{event.files.map(file => <tr key={file.id}>
+        <td>{file.name}{file.reviewNote && <small className="field-note">{file.reviewNote}</small>}</td><td><Badge tone={file.status.startsWith('样例') ? 'success' : 'neutral'}>{file.status}</Badge></td>
+        <td><Badge>{file.reviewStatus ?? '待核对'}</Badge></td>
+        <td><button type="button" className="button small" onClick={() => setEditingSource({ kind: 'file', record: file })}>修改核对状态</button></td>
       </tr>)}</Table>
     </details>}
+    {editingSource && <Dialog title={editingSource.kind === 'issue' ? '核对资料 · ' + editingSource.record.field : '核对资料 · ' + editingSource.record.name}
+      variant="drawer" fullOnMobile close={() => setEditingSource(null)}>
+      <form className="form-stack" aria-label="修改资料核对结果" onSubmit={event => {
+        event.preventDefault();
+        const form = new FormData(event.currentTarget);
+        const note = String(form.get('note') ?? '').trim();
+        if (editingSource.kind === 'issue') {
+          const value = String(form.get('value') ?? '').trim();
+          confirm(form.get('status') === '已确认' ? value : null, editingSource.record, note);
+        } else {
+          update(current => ({ ...current, files: current.files.map(file => file.id === editingSource.record.id
+            ? { ...file, reviewStatus: form.get('status'), reviewNote: note } : file) }));
+          notify('资料核对状态已保存');
+        }
+        setEditingSource(null);
+      }}>
+        <Select label="核对状态" name="status" value={editingStatus} onChange={status => setEditingSource(current => ({ ...current, status }))}
+          options={editingSource.kind === 'issue' ? ['待核对', '已确认'] : ['待核对', '已确认', '已停用']} />
+        {editingSource.kind === 'issue' && <label>采用内容<input name="value" maxLength={240}
+          type={editingType} min={0} step={editingType === 'number' ? '0.01' : undefined} required={editingStatus === '已确认'}
+          defaultValue={editingSource.record.resolved ?? ''} /></label>}
+        <label>核对依据<textarea name="note" rows={3} maxLength={500} defaultValue={editingSource.record.resolutionNote ?? editingSource.record.reviewNote ?? ''} /></label>
+        <button className="button primary">保存核对结果</button>
+      </form>
+    </Dialog>}
   </>;
 }
 
-export function Schedule({ event, readOnly, openChange, update, notify, navigate }) {
+export function Schedule({ event, readOnly, openChange, update, notify, navigate, registration }) {
   const [room, setRoom] = useState('全部');
   const [editing, setEditing] = useState(null);
   const [problem, setProblem] = useState('');
   const [dragRoom, setDragRoom] = useState('');
+  const [releaseOpen, setReleaseOpen] = useState(null);
+  const [publishing, setPublishing] = useState(false);
+  const staged = !event.version && event.executionPlan;
+  const assessment = useMemo(() => staged && assessExecutionPlan(event), [staged, event]);
+  const schedule = assessment && signupSnapshot({ ...event, ...assessment, version: 1 });
+  const outdated = releaseOpen && (releaseOpen.revision !== registration.current?.revision ||
+    JSON.stringify(releaseOpen.schedule) !== JSON.stringify(schedule));
+  async function releaseFirstSchedule() {
+    if (publishing || !releaseOpen || outdated || !assessment || assessment.issues.length) return;
+    setPublishing(true);
+    try {
+      const result = await registration.change('/schedule', 'PATCH', { revision: releaseOpen.revision, event: releaseOpen.schedule });
+      update(current => ({ ...current, ...result.event, executionPlan: null }));
+      setReleaseOpen(false);
+      notify('执行议程已发布为 v1');
+    } catch (error) { setProblem(error.message); }
+    finally { setPublishing(false); }
+  }
   const agenda = event.agenda.toSorted((a, b) => a.start.localeCompare(b.start));
   const sessions = agenda.filter(item => room === '全部' || roomLabel(item.room) === room);
   function createProposal(item, target, start) {
@@ -81,11 +141,29 @@ export function Schedule({ event, readOnly, openChange, update, notify, navigate
       ? '编辑活动目标、环节和筹备事项，补齐方案里待确认的信息。'
       : readOnly ? '查看各会场的容量、设备和议程安排。' : '查看各会场的安排，编辑时间或拖动环节，发布前统一校验。'}>
       <Badge tone={event.version ? 'success' : 'neutral'}>{event.version ? '发布版本 v' + event.version : '计划草稿'}</Badge>
+      {!readOnly && !event.version && !event.organizedPlan && !agenda.length && <button className="button primary"
+        onClick={() => update(current => current.organizedPlan ? current : { ...current, organizedPlan: manualPlan(current) })}>手工编排方案</button>}
     </PageHead>
     {event.organizedPlan && <div className="activity-anchor" id="activity-organized-plan">
-      <OrganizedPlan key={event.organizedPlan.id} plan={event.organizedPlan} update={update} notify={notify} navigate={navigate} />
+      <OrganizedPlan key={event.organizedPlan.id} event={event} plan={event.organizedPlan} update={update} notify={notify} navigate={navigate} />
     </div>}
-    {event.organizedPlan?.topicPlan && !agenda.length ? <Notice>当前为方案草稿。具体时间和会场留待确认后排程。</Notice> : <>
+    {staged && <div className="activity-anchor" id="activity-execution"><Panel title="执行计划 · 待排程" action={<Badge>{staged.agenda.length} 个环节</Badge>}>
+      <ul className="overview-agenda-list">{staged.agenda.map(row => <li key={row.id}><div><strong>{row.title}</strong>
+        <small>{row.duration && row.duration + ' 分钟 · '}{row.start && row.end ? timeRange(row) : '时段待定'} · {roomLabel(row.room)}</small></div></li>)}</ul>
+      {assessment.issues.length > 0 && <details><summary>发布前需处理 {assessment.issues.length} 项</summary><ul>{assessment.issues.map(issue => <li key={issue}>{issue}</li>)}</ul></details>}
+      <div className="actions"><button className="button" onClick={() => navigate('schedule/plan')}>编辑方案并重新采用</button>
+        {!readOnly && <button className="button primary" disabled={!!assessment.issues.length || !registration.current} onClick={() => {
+          setProblem(''); setReleaseOpen({ revision: registration.current.revision, schedule });
+        }}>核对并发布议程</button>}</div>
+    </Panel></div>}
+    {releaseOpen && assessment && <Dialog title="发布执行议程 v1" close={() => { if (!publishing) setReleaseOpen(false); }}>
+      <p>{event.title} · {event.date} · {assessment.agenda.length} 个环节</p>
+      <ul>{assessment.agenda.map(row => <li key={row.id}>{timeRange(row)} · {row.title} · {roomLabel(row.room)}</li>)}</ul>
+      {problem && <Notice tone="warning" announce>{problem}</Notice>}
+      {outdated && <Notice tone="warning">活动或报名已更新，请关闭并重新核对发布范围。</Notice>}
+      <button className="button primary" disabled={publishing || outdated || !!assessment.issues.length} onClick={releaseFirstSchedule}>{publishing ? '正在发布…' : '确认发布 v1'}</button>
+    </Dialog>}
+    {event.organizedPlan && !agenda.length ? (!staged && <Notice>保存方案后可采用为执行计划，未确定时段的环节会进入待排程。</Notice>) : <>
     <Panel title="会场安排">
       <div className="room-grid">{event.rooms.map(item => {
         const label = roomLabel(item.id);
@@ -299,7 +377,7 @@ export function ChangePage({ event, readOnly, publish, refreshMoveChange, naviga
     event.change.operationsKey !== JSON.stringify(rescueOperations(event)));
   return <>
     <PageHead heading="h3" title="变更单" description={readOnly ? '比较候选方案，查看发布影响和通知预览。' : '核对影响、比较方案，再统一发布。'} />
-    {rescueDraft ? <ActiveRescue key={JSON.stringify([event.change.id, event.change.revision, event.change.analysis.incident])}
+    {rescueDraft ? <ActiveRescue key={JSON.stringify([event.change.id, event.change.revision, event.change.analysis.incident, event.change.preferredIndex])}
       event={event} change={event.change} readOnly={readOnly} stale={stale} prepareRescue={prepareRescue} releaseRescue={releaseRescue} />
       : rescueRelease ? <ReleasedRescue release={latest} navigate={navigate} />
       : showDraft ? <ActiveChange key={event.change.id} event={event} readOnly={readOnly} publish={publish} refreshMoveChange={refreshMoveChange} /> : <Panel title={selectedRelease ? '发布记录' : latest ? '最近发布' : '待发布变更'}>

@@ -24,6 +24,57 @@
 .form-stack :is(input, textarea, select):focus, .search:focus-within { border-color: var(--focus); box-shadow: 0 0 0 3px var(--accent-soft); }
 .form-stack :is(input, textarea, select):user-invalid { border-color: #b33e61; }
 .search input:focus-visible { outline: none; }
+
+/* 筛选条件始终可见，移除后回到对应控件。 */
+.active-filters { display: flex; flex-wrap: wrap; gap: 7px; padding: 0; margin: 0 0 13px; list-style: none; }
+.filter-chip { display: inline-flex; align-items: center; gap: 10px; min-height: 36px; max-width: 100%;
+  padding: 6px 10px; border: 1px solid var(--accent-border); border-radius: 8px; color: var(--accent); background: var(--accent-soft); font-size: 13px; }
+.filter-chip span { min-width: 0; overflow-wrap: anywhere; text-align: left; }
+.filter-chip svg { flex: 0 0 auto; }
+.filter-chip:hover { border-color: var(--accent); background: var(--surface-hover); }
+.memory-search { align-items: end; gap: 8px; }
+.memory-search .search { flex: 1 1 220px; min-height: 44px; }
+.memory-search .search input { width: 100%; max-width: none; }
+.memory-search .select-field { flex: 1 1 165px; max-width: 230px; font-size: 13px; }
+.memory-search :is(.button, .select-trigger) { min-height: 44px; }
+.source-result-count { margin: 8px 0 12px; font-size: 13px; }
+.source-index table { min-width: 740px; }
+.source-index td:first-child { min-width: 140px; }
+.source-actions { min-width: 190px; justify-content: flex-start; }
+.source-index-cards { display: grid; gap: 10px; list-style: none; margin: 0; padding: 0; }
+.source-index-cards > li { padding: 13px; min-width: 0; border: 1px solid var(--border); border-radius: 10px; }
+.source-card-title, .source-card-status { display: flex; flex-wrap: wrap; align-items: center; gap: 7px; }
+.source-card-title { justify-content: space-between; margin-bottom: 9px; }
+.source-card-title > strong { min-width: 0; overflow-wrap: anywhere; }
+.source-card-access { margin-block: 12px; }
+.source-index-cards .source-actions { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); min-width: 0; }
+.source-index-cards .button { min-height: 44px; }
+.source-index-cards p { margin-block: 10px; font-size: 13px; }
+.preview-return { margin-bottom: 16px; min-height: 36px; }
+.model-settings-dialog .actions { justify-content: flex-end; align-items: center; }
+.model-settings-dialog .actions .button { min-height: 44px; }
+.source-editor-dialog .form-stack + .form-stack { margin-top: 22px; }
+.source-editor-dialog .actions { justify-content: flex-end; }
+
+.loading-image { position: relative; display: grid; place-items: center; background: var(--surface-hover); min-width: 0; isolation: isolate; }
+.loading-image img { display: block; width: 100%; height: 100%; object-fit: contain; opacity: 0; transition: opacity 160ms ease-out; }
+.loading-image[data-state='loaded'] img { opacity: 1; }
+.loading-image[data-state='loading']::after { content: ''; position: absolute; inset: 0; z-index: 1; pointer-events: none;
+  background: linear-gradient(100deg, transparent 20%, var(--white) 50%, transparent 80%); opacity: .55;
+  animation: image-shimmer 1.3s ease-in-out infinite; }
+.image-loading-label, .image-retry { position: absolute; inset: 0; display: flex; flex-direction: column; gap: 12px;
+  align-items: center; justify-content: center; padding: 20px; color: var(--muted); font-size: 14px; text-align: center; }
+.image-retry { z-index: 2; background: var(--surface-hover); }
+.image-retry .button { min-height: 44px; }
+.source-image-preview { min-height: 240px; margin-block: 14px; border: 1px solid var(--border); border-radius: 10px; overflow: hidden; }
+.source-image-preview img { max-height: 60dvh; height: auto; }
+.public-hero-photo.loading-image { aspect-ratio: auto !important; }
+.public-hero-photo.loading-image > img { height: 136%; object-fit: cover; object-position: 81% top; }
+@keyframes image-shimmer { from { transform: translateX(-100%); } to { transform: translateX(100%); } }
+@media (prefers-reduced-motion: reduce) {
+  .loading-image img { transition: none; }
+  .loading-image[data-state='loading']::after { animation: none; }
+}
 .upload-zone, .room { transition: background var(--motion-quick) ease, border-color var(--motion-quick) ease; }
 .room.dragging { background: var(--accent-soft); border-color: var(--focus); }
 .radio-mark { transition: border-width var(--motion-layer) var(--ease-spring), border-color var(--motion-quick) ease; }

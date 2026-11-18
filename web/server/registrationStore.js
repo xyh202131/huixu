@@ -1,4 +1,4 @@
-import { createHmac, randomBytes, randomUUID, timingSafeEqual } from 'node:crypto';
+import { createHash, createHmac, randomBytes, randomUUID, timingSafeEqual } from 'node:crypto';
 import { mkdirSync } from 'node:fs';
 import { dirname } from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
@@ -6,8 +6,10 @@ import { initialEvents, activityTypes } from '../src/model.js';
 import { describeRescueImpact } from '../src/changeImpact.js';
 import { reviewStatuses, reservesSeat } from '../src/registrationRules.js';
 import { analyzeRescue, rescueTitle, validateRescuePlan } from '../src/rescueScheduling.js';
-import { isClock } from '../src/scheduling.js';
+import { checkCandidate, isClock, sameCandidate } from '../src/scheduling.js';
 import { localDatabasePath } from './localData.js';
+import { workspaceDraft } from '../src/workspaceDraft.js';
+import { guestRequestStore } from './guestRequests.js';
 
 export class RegistrationError extends Error {
   constructor(status, message) {
@@ -20,6 +22,7 @@ export const shortText = (value, max = 160) => typeof value === 'string' ? value
 export const validId = value => typeof value === 'string' && /^[\w-]{1,100}$/.test(value);
 export const validEmail = value => /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(value) && value.length <= 254;
 const capacityValue = value => Number.isSafeInteger(value) && value >= 0 && value <= 100000;
+const validRoomName = value => typeof value === 'string' && value.length <= 100 && value.trim().length > 0;
 const linkLifetime = 7 * 24 * 60 * 60 * 1000;
 
 function snapshot(input) {
@@ -29,15 +32,17 @@ function snapshot(input) {
     throw new RegistrationError(400, '活动或名额信息无效。');
   }
   const rooms = input.rooms.map(room => {
-    if (!validId(room?.id) || !capacityValue(room.capacity)) throw new RegistrationError(400, '会场容量无效。');
+    if (!validRoomName(room?.id) || !capacityValue(room.capacity)) throw new RegistrationError(400, '会场名称或容量无效。');
     return { id: room.id, capacity: room.capacity, ready: isClock(room.ready) ? room.ready : '00:00',
       equipment: Array.isArray(room.equipment) ? room.equipment.slice(0, 30).map(value => shortText(value, 80)).filter(Boolean) : [] };
   });
   const agenda = input.agenda.map(session => {
     if (!validId(session?.id) || !shortText(session.title) || !isClock(session.start) || !isClock(session.end) ||
         !rooms.some(room => room.id === session.room)) throw new RegistrationError(400, '议程场次或会场无效。');
+    if (session.expected != null && (!capacityValue(session.expected) || !session.expected)) throw new RegistrationError(400, '分场预计人数无效。');
     return { id: session.id, title: shortText(session.title), start: session.start, end: session.end, room: session.room,
-      guest: shortText(session.guest, 80) || '待确认', equipment: equipmentList(session.equipment) };
+      guest: shortText(session.guest, 80) || '待确认', equipment: equipmentList(session.equipment),
+      ...(capacityValue(session.expected) && session.expected > 0 && { expected: session.expected }) };
   });
   if (new Set(agenda.map(item => item.id)).size !== agenda.length || new Set(rooms.map(item => item.id)).size !== rooms.length) {
     throw new RegistrationError(400, '场次或会场编号重复。');
@@ -108,6 +113,12 @@ export function createRegistrationStore(root, override, now = Date.now) {
       shared INTEGER NOT NULL DEFAULT 0, public_id TEXT NOT NULL UNIQUE
     );
     CREATE INDEX IF NOT EXISTS signup_events_owner ON signup_events (owner);
+    CREATE TABLE IF NOT EXISTS workspace_drafts (
+      event_id TEXT PRIMARY KEY REFERENCES signup_events(id), revision INTEGER NOT NULL, data TEXT NOT NULL
+    );
+    CREATE TABLE IF NOT EXISTS task_handoffs (
+      event_id TEXT PRIMARY KEY REFERENCES signup_events(id), token_hash TEXT NOT NULL UNIQUE, expires INTEGER NOT NULL
+    );
     CREATE TABLE IF NOT EXISTS signups (
       event_id TEXT NOT NULL REFERENCES signup_events(id), id TEXT NOT NULL, name TEXT NOT NULL, email TEXT NOT NULL DEFAULT '',
       session_id TEXT NOT NULL, status TEXT NOT NULL, note TEXT NOT NULL DEFAULT '', attendance TEXT NOT NULL DEFAULT '待回应',
@@ -182,10 +193,13 @@ export function createRegistrationStore(root, override, now = Date.now) {
     return db.prepare(personSelect + ' ORDER BY rowid').all(eventId);
   }
 
+  const guests = guestRequestStore({ db, transaction, findEvent, now, bump, operationsFor, saveOperations });
+
   function state(row) {
     return {
       event: JSON.parse(row.snapshot), revision: row.revision, shared: Boolean(row.shared), publicId: row.public_id,
-      people: peopleFor(row.id),
+      people: peopleFor(row.id), guestRequests: guests.list(row.id),
+      workspaceRevision: db.prepare('SELECT revision FROM workspace_drafts WHERE event_id=?').get(row.id)?.revision ?? 0,
       checkins: db.prepare('SELECT person_id AS personId, session_id AS sessionId FROM signup_checkins WHERE event_id = ? ORDER BY rowid').all(row.id),
       operations: operationsFor(row.id),
       rescueReleases: db.prepare('SELECT data FROM signup_rescue_releases WHERE event_id = ? ORDER BY version DESC').all(row.id)
@@ -217,7 +231,85 @@ export function createRegistrationStore(root, override, now = Date.now) {
   }
 
   function list(owner) {
-    return db.prepare('SELECT snapshot FROM signup_events WHERE owner = ? ORDER BY rowid').all(owner).map(row => JSON.parse(row.snapshot));
+    return db.prepare(`SELECT e.snapshot, d.revision, d.data FROM signup_events e
+      LEFT JOIN workspace_drafts d ON d.event_id = e.id WHERE e.owner = ? ORDER BY e.rowid`).all(owner)
+      .map(row => ({ ...JSON.parse(row.snapshot), ...(row.data && { savedDraft: { revision: row.revision, data: JSON.parse(row.data) } }) }));
+  }
+
+  function readDraft(owner, eventId) {
+    findEvent(eventId, owner);
+    const row = db.prepare('SELECT revision, data FROM workspace_drafts WHERE event_id = ?').get(eventId);
+    return row ? { revision: row.revision, data: JSON.parse(row.data) } : { revision: 0, data: null };
+  }
+
+  function issueHandoff(owner, eventId) {
+    findEvent(eventId, owner);
+    const saved = readDraft(owner, eventId);
+    if (!saved.data?.tasks.length) throw new RegistrationError(409, '请先保存含筹备任务的服务端草稿。');
+    const token = randomBytes(32).toString('base64url');
+    const expires = now() + linkLifetime;
+    db.prepare(`INSERT INTO task_handoffs VALUES (?,?,?) ON CONFLICT(event_id)
+      DO UPDATE SET token_hash=excluded.token_hash, expires=excluded.expires`).run(eventId, createHash('sha256').update(token).digest('hex'), expires);
+    return { token, expires };
+  }
+
+  function revokeHandoff(owner, eventId) {
+    findEvent(eventId, owner);
+    db.prepare('DELETE FROM task_handoffs WHERE event_id=?').run(eventId);
+    return { revoked: true };
+  }
+
+  function taskHandoff(token, edit) {
+    return transaction(() => {
+      if (typeof token !== 'string' || token.length !== 43) throw new RegistrationError(404, '任务协作链接不可用。');
+      const row = db.prepare(`SELECT d.* FROM task_handoffs h JOIN workspace_drafts d ON h.event_id=d.event_id
+        WHERE h.token_hash=? AND h.expires>?`).get(createHash('sha256').update(token).digest('hex'), now());
+      if (!row) throw new RegistrationError(404, '任务协作链接已过期或被撤销。');
+      const draft = JSON.parse(row.data);
+      let revision = row.revision;
+      if (edit) {
+        if (edit.revision !== revision) throw new RegistrationError(409, '任务已更新，请刷新后重新核对。');
+        const task = draft.tasks.find(item => String(item.id) === edit.taskId);
+        if (!task || typeof edit.done !== 'boolean' || typeof edit.owner !== 'string') throw new RegistrationError(400, '请核对任务和负责人。');
+        task.owner = shortText(edit.owner, 80) || '待分配';
+        task.done = edit.done;
+        revision += 1;
+        db.prepare('UPDATE workspace_drafts SET data=?, revision=? WHERE event_id=?').run(JSON.stringify(draft), revision, row.event_id);
+      }
+      return { title: draft.title, revision, tasks: draft.tasks.map(({ id, name, owner, offset, done }) => ({ id, name, owner, offset, done })) };
+    });
+  }
+
+  function saveDraft(owner, eventId, input) {
+    return transaction(() => {
+      const saved = readDraft(owner, eventId);
+      if (input.revision !== saved.revision) throw new RegistrationError(409, '服务端草稿已有更新，请先核对最新版本。');
+      if (!input.data || !shortText(input.data.title) || !Array.isArray(input.data.tasks) || !Array.isArray(input.data.issues)) {
+        throw new RegistrationError(400, '活动草稿格式无效。');
+      }
+      const data = workspaceDraft(input.data);
+      const namedTasks = data.tasks.every(task => task && ['string', 'number'].includes(typeof task.id) && typeof task.name === 'string' && typeof task.done === 'boolean');
+      if (!namedTasks || !data.issues.every(issue => issue && Array.isArray(issue.choices)) ||
+          ['teamLessons', 'reviewConflicts'].some(key => data[key] != null && !Array.isArray(data[key]))) {
+        throw new RegistrationError(400, '任务、复盘或资料核对清单无效。');
+      }
+      if (data.organizedPlan) {
+        const plan = data.organizedPlan;
+        const sections = ['agenda', 'venues', 'roster', 'budgetItems'];
+        if (plan.topicPlan) sections.push('tasks', 'roles', 'supplies');
+        if (!plan.id || !plan.event || typeof plan.event !== 'object' ||
+            !sections.every(section => Array.isArray(plan[section]) && plan[section].every(row => row && typeof row.id === 'string'))) {
+          throw new RegistrationError(400, '活动方案格式无效。');
+        }
+      }
+      if (data.executionPlan && (!Array.isArray(data.executionPlan.agenda) || !Array.isArray(data.executionPlan.rooms))) {
+        throw new RegistrationError(400, '待排程格式无效。');
+      }
+      const revision = saved.revision + 1;
+      db.prepare(`INSERT INTO workspace_drafts VALUES (?, ?, ?) ON CONFLICT(event_id)
+        DO UPDATE SET revision = excluded.revision, data = excluded.data`).run(eventId, revision, JSON.stringify(data));
+      return { revision, data };
+    });
   }
 
   function open(owner, input) {
@@ -246,6 +338,16 @@ export function createRegistrationStore(root, override, now = Date.now) {
         event = snapshot({ ...input.event, id: eventId, formOpen: previous.formOpen });
         if (event.version !== previous.version + 1) throw new RegistrationError(409, '议程已更新，请使用最新发布版本。');
         const people = peopleFor(eventId);
+        if (previous.version === 0) {
+          if (!event.capacity) throw new RegistrationError(400, '首次发布须确认活动预计人数和报名总名额。');
+          if (!event.date || !event.agenda.length) throw new RegistrationError(400, '首次发布须确认活动日期及议程。');
+          for (const session of event.agenda) {
+            const room = event.rooms.find(item => item.id === session.room);
+            if (!room?.capacity) throw new RegistrationError(400, '请确认会场容量。');
+            const issues = checkCandidate({ ...event, attendees: people, ...operationsFor(eventId) }, { before: session }, session, undefined, undefined, true);
+            if (issues.length) throw new RegistrationError(409, session.title + ' · ' + issues.join('、'));
+          }
+        }
         const sessionIds = new Set(event.agenda.map(item => item.id));
         if (people.some(person => person.sessionId && !sessionIds.has(person.sessionId))) {
           throw new RegistrationError(409, '新议程缺少已有关联报名的场次。');
@@ -313,6 +415,27 @@ export function createRegistrationStore(root, override, now = Date.now) {
       db.prepare('INSERT INTO signup_checkins VALUES (?, ?, ?)').run(eventId, person.id, sessionId);
       bump(eventId);
       return { duplicate: false, name: person.name, state: state(findEvent(eventId, owner)) };
+    });
+  }
+
+  function migrateCheckins(owner, eventId, records) {
+    if (!Array.isArray(records) || records.length > 1000) {
+      throw new RegistrationError(400, '每批最多迁移 1000 条历史签到。');
+    }
+    return transaction(() => {
+      const row = findEvent(eventId, owner);
+      const people = new Map(peopleFor(eventId).map(person => [person.id.toUpperCase(), person.id]));
+      const insert = db.prepare('INSERT OR IGNORE INTO signup_checkins VALUES (?, ?, ?)');
+      let imported = 0;
+      for (const record of records) {
+        if (!validId(record?.personId) || (record.sessionId !== '' && !validId(record.sessionId))) continue;
+        const personId = people.get(record.personId.toUpperCase());
+        if (!personId) continue;
+        // 历史签到保留原签到点，之后的出席状态或换场不会改变已发生的记录。
+        imported += insert.run(eventId, personId, record.sessionId).changes;
+      }
+      if (imported) bump(eventId);
+      return state(imported ? findEvent(eventId, owner) : row);
     });
   }
 
@@ -408,7 +531,8 @@ export function createRegistrationStore(root, override, now = Date.now) {
       const { start, end } = entry.availability ?? {};
       const record = { id: entry.id, sessionId: entry.sessionId, role: entry.role, name: shortText(entry.name, 80) };
       if (isClock(start) && isClock(end) && start < end) record.availability = { start, end };
-      replies.set(entry.id, record);
+      // 专属链接的回执由嘉宾维护，客户端演练快照不能覆盖它。
+      if (!replies.get(entry.id)?.guestConfirmed) replies.set(entry.id, record);
     }
     operations.replies = [...replies.values()];
     const encoded = JSON.stringify(event);
@@ -457,11 +581,32 @@ export function createRegistrationStore(root, override, now = Date.now) {
     const analysis = analyzeRescue(event, input.incident);
     if (analysis.error) throw new RegistrationError(400, analysis.error);
     const { incident } = analysis;
+    let preferredIndex = 0;
+    let invalidatedSelection = null;
+    if (input.preferredMoves !== undefined) {
+      if (!Array.isArray(input.preferredMoves) || input.preferredMoves.length > 500 ||
+          input.preferredMoves.some(move => !validId(move?.sessionId) || !validRoomName(move.room) || !isClock(move.start) || !isClock(move.end))) {
+        throw new RegistrationError(400, '所选救场方案格式无效。');
+      }
+      const moves = input.preferredMoves.map(({ sessionId, room, start, end }) => ({ sessionId, room, start, end }));
+      const issues = validateRescuePlan(event, incident, { moves });
+      if (issues.length) {
+        preferredIndex = -1;
+        invalidatedSelection = { moves, issues };
+      } else {
+        preferredIndex = analysis.plans.findIndex(plan =>
+          moves.every(move => plan.moves.some(candidate => move.sessionId === candidate.sessionId && sameCandidate(move, candidate))));
+        if (preferredIndex === -1) {
+          analysis.plans.push({ moves });
+          preferredIndex = analysis.plans.length - 1;
+        }
+      }
+    }
     analysis.plans = analysis.plans.map(plan => ({
       ...plan, proof: signature(JSON.stringify([eventId, current.revision, incident, plan.moves])),
       impact: describeRescueImpact(event, plan),
     }));
-    return { state: current, analysis };
+    return { state: current, analysis, preferredIndex, invalidatedSelection };
   }
 
   function publishRescue(owner, eventId, input) {
@@ -605,8 +750,9 @@ export function createRegistrationStore(root, override, now = Date.now) {
   }
 
   return {
-    list, open, get: (owner, id) => state(findEvent(id, owner)), changeEvent, savePerson, publicEvent, publicSignup,
-    issueLink, revoke, confirmation, respond, importPeople, checkIn, recordActual, rescuePreview, publishRescue, close: () => db.close(),
+    list, open, readDraft, saveDraft, guests, issueHandoff, revokeHandoff, taskHandoff,
+    get: (owner, id) => state(findEvent(id, owner)), changeEvent, savePerson, publicEvent, publicSignup,
+    issueLink, revoke, confirmation, respond, importPeople, checkIn, migrateCheckins, recordActual, rescuePreview, publishRescue, close: () => db.close(),
     mail: { db, now, transaction, findEvent, personFor, tokenFor, issueLink, mailSelect },
   };
 }

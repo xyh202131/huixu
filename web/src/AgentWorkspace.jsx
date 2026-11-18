@@ -5,7 +5,7 @@ import { Dialog, Notice } from './interactions';
 import { checkinPoint, roomLabel, timeRange } from './scheduling';
 import { RescueBlockers } from './RescueChange';
 
-function AgentResponse({ run, event, ask, stop, askLocal, openSettings, reviewProposal, openSource, openReviewedChange }) {
+function AgentResponse({ run, event, ask, stop, askLocal, openSettings, reviewProposal, openSource, openReviewedChange, selectCandidate }) {
   const released = run.reviewChangeId && event.history.find(change => change.id === run.reviewChangeId);
   return <>
     <p className="agent-question">{run.question}</p>
@@ -30,7 +30,7 @@ function AgentResponse({ run, event, ask, stop, askLocal, openSettings, reviewPr
     {run.citations?.length > 0 && <details className="agent-sources" open>
       <summary>检索到的原文（{run.citations.length}）</summary>
       <ol>{run.citations.map((item, index) => <li key={item.chunkId}>
-        <button type="button" className="memory-hit" onClick={() => openSource(item.chunkId)}>
+        <button type="button" id={`agent-source-${event.id}-${item.chunkId}`} className="memory-hit" onClick={() => openSource(item.chunkId)}>
           <span className="agent-source-number" aria-hidden="true">{index + 1}</span>
           <span><strong>{item.name} · v{item.revision}</strong><small>{item.location}</small></span>
           <FileText size={16} aria-hidden="true" />
@@ -38,8 +38,8 @@ function AgentResponse({ run, event, ask, stop, askLocal, openSettings, reviewPr
       </li>)}</ol>
     </details>}
     {run.model && <p className="agent-evidence">模型 · {run.model}</p>}
-    {run.proposal?.kind === 'move' && run.proposal.analysis && <MoveAnalysis proposal={run.proposal} event={event} reviewProposal={reviewProposal} />}
-    {run.proposal?.kind === 'rescue' && <RescueProposal proposal={run.proposal} reviewProposal={reviewProposal} />}
+    {run.proposal?.kind === 'move' && run.proposal.analysis && <MoveAnalysis proposal={run.proposal} event={event} selected={run.context.selected} selectCandidate={selectCandidate} reviewProposal={reviewProposal} />}
+    {run.proposal?.kind === 'rescue' && <RescueProposal proposal={run.proposal} selected={run.context.selected} reviewProposal={reviewProposal} selectCandidate={selectCandidate} />}
     {run.proposal?.kind === 'event' && <button type="button" className="button primary" onClick={() => reviewProposal()}>打开活动草稿</button>}
     {released && <>
       <Notice tone="success" announce>{released.title}已发布 · v{released.version}</Notice>
@@ -49,14 +49,14 @@ function AgentResponse({ run, event, ask, stop, askLocal, openSettings, reviewPr
   </>;
 }
 
-function RescueProposal({ proposal, reviewProposal }) {
+function RescueProposal({ proposal, selected, reviewProposal, selectCandidate }) {
   const { analysis } = proposal;
-  const [index, setIndex] = useState(0);
+  const index = selected - 1;
   return <section className="agent-move-analysis" aria-label="整场救场分析">
     <h3>{analysis.affected.length} 个受影响环节</h3>
     {analysis.plans.length > 0 && <div className="selection-list">{analysis.plans.map((plan, position) =>
-      <button type="button" key={position} aria-pressed={index === position} onClick={() => setIndex(position)}>
-        <strong>{position ? '备选 ' + position : '推荐方案'}</strong><Badge tone="success">组合校验通过</Badge>
+      <button type="button" key={position} aria-pressed={index === position} onClick={() => selectCandidate(position + 1)}>
+        <strong>方案 {position + 1}{position === 0 && ' · 推荐'}</strong><Badge tone="success">组合校验通过</Badge>
         <span className="choice-note">{plan.moves.map(move => roomLabel(move.room) + ' ' + timeRange(move)).join(' · ')}</span>
       </button>)}</div>}
     <RescueBlockers analysis={analysis} />
@@ -64,11 +64,11 @@ function RescueProposal({ proposal, reviewProposal }) {
   </section>;
 }
 
-function MoveAnalysis({ proposal, event, reviewProposal }) {
+function MoveAnalysis({ proposal, event, selected, reviewProposal, selectCandidate }) {
   const { requested, alternatives, blocked, window } = proposal.analysis;
   const { affected } = proposal;
   const options = [requested, ...alternatives];
-  const [selection, setSelection] = useState(() => requested.issues.length && alternatives.length ? 1 : 0);
+  const selection = selected - 1;
   const { candidate, issues } = options[selection];
   const room = event.rooms.find(item => item.id === candidate.room);
   const session = event.agenda.find(item => item.id === proposal.before.id);
@@ -79,10 +79,10 @@ function MoveAnalysis({ proposal, event, reviewProposal }) {
       <p><small>所选方案</small><strong>{roomLabel(candidate.room)}</strong><span>{timeRange(candidate)}</span></p>
     </div>
     <div className="selection-list" aria-label="选择调整方案">{options.map(({ candidate: option, issues: blockers }, index) => <button type="button"
-      key={`${option.room}/${option.start}/${option.end}`} aria-pressed={selection === index} onClick={() => setSelection(index)}>
+      key={`${option.room}/${option.start}/${option.end}`} aria-pressed={selection === index} onClick={() => selectCandidate(index + 1)}>
       <span className="radio-mark" aria-hidden="true" /><strong>{roomLabel(option.room)} · {timeRange(option)}</strong>
       <Badge tone={blockers.length ? 'amber' : 'success'}>{blockers.length ? '存在冲突' : '校验通过'}</Badge>
-      <span className="choice-note">{index === 0 ? '原请求' : '备选'}{blockers.length > 0 && ' · ' + blockers.join('、')}</span>
+      <span className="choice-note">方案 {index + 1} · {index === 0 ? '原请求' : '备选'}{blockers.length > 0 && ' · ' + blockers.join('、')}</span>
     </button>)}</div>
     {requested.issues.length > 0 && !alternatives.length && <>
       <Notice tone="warning">{timeRange(window)} 的搜索范围内暂无可行方案。</Notice>
@@ -99,7 +99,7 @@ function MoveAnalysis({ proposal, event, reviewProposal }) {
   </section>;
 }
 
-export function AgentWorkspace({ id, event, account, docked, open, close, run, ask, stop, askLocal, openSettings, openAccount, reviewProposal, openSource, openReviewedChange }) {
+export function AgentWorkspace({ id, event, account, docked, open, close, run, history, clearHistory, selectCandidate, ask, stop, askLocal, openSettings, reviewProposal, openSource, openReviewedChange }) {
   const [input, setInput] = useState('');
   const transcript = useRef(null);
   const question = run?.question;
@@ -118,20 +118,19 @@ export function AgentWorkspace({ id, event, account, docked, open, close, run, a
   if (!docked && !open) return null;
   const content = <>
     <div className="agent-context"><FileText size={15} aria-hidden="true" /><span>{event.title}</span></div>
-    <div ref={transcript} className="agent-transcript" role="region" aria-label="Agent 对话" tabIndex={account && run ? 0 : undefined}>
-      {account ? <>
-        {run ? <AgentResponse {...{ run, event, ask, stop, askLocal, openSettings, reviewProposal, openSource, openReviewedChange }} /> :
-          <p className="muted">查询活动进展、查找资料，或准备一份议程调整草稿。</p>}
-        {!run?.pending && <div className="agent-prompts">
-          <button type="button" className="button small" onClick={() => ask('当前活动的筹备进展怎么样？')}>查看筹备进展</button>
-          <button type="button" className="button small" onClick={() => ask('列出当前活动可以引用的导入资料及其版本。')}>查看可引用资料</button>
-        </div>}
-      </> : <>
-        <p className="muted">登录后可询问议程、查询已授权的资料，或准备活动与变更草稿。</p>
-        <button type="button" className="button small" onClick={openAccount}>登录后使用 Agent</button>
-      </>}
+    <div ref={transcript} className="agent-transcript" role="region" aria-label="Agent 对话" tabIndex={run ? 0 : undefined}>
+      {!!history.length && <details><summary>此前对话（{history.length}）</summary>{history.map((item, index) =>
+        <div key={index}><strong>{item.question}</strong><p>{item.answer}</p></div>)}</details>}
+      {run ? <AgentResponse {...{ run, event, ask, stop, askLocal, openSettings, reviewProposal, openSource, openReviewedChange, selectCandidate }} /> :
+        <p className="muted">{account ? '查询活动进展、查找资料，或准备一份议程调整草稿。' : '配置模型后即可询问当前活动、起草方案或分析议程调整。访客草稿保留到本次页面关闭。'}</p>}
+      {!run?.pending && <div className="agent-prompts">
+        {run && <button type="button" className="button small" onClick={clearHistory}>清空本场对话</button>}
+        <button type="button" className="button small" onClick={() => ask('当前活动的筹备进展怎么样？')}>查看筹备进展</button>
+        {account && <button type="button" className="button small" onClick={() => ask('列出当前活动可以引用的导入资料及其版本。')}>查看可引用资料</button>}
+        <button type="button" className="button small" onClick={openSettings}>配置模型</button>
+      </div>}
     </div>
-    {account && <form className="agent-compose" onSubmit={submit}>
+    <form className="agent-compose" onSubmit={submit}>
       <textarea name="command" aria-label="对 Agent 说" placeholder="例如：创新工作坊几点开始？" maxLength={2000} rows={2} enterKeyHint="send"
         value={input} onChange={event => setInput(event.target.value)} onKeyDown={event => {
           if (event.key !== 'Enter' || event.shiftKey || event.nativeEvent.isComposing || event.keyCode === 229) return;
@@ -141,7 +140,7 @@ export function AgentWorkspace({ id, event, account, docked, open, close, run, a
       <button type="submit" className="button primary icon-button" aria-label="提交给 Agent" disabled={run?.pending || !input.trim()}>
         <ArrowUp size={18} aria-hidden="true" />
       </button>
-    </form>}
+    </form>
   </>;
 
   if (!docked) return <Dialog title="Agent 工作台" variant="drawer" className="agent-drawer" fullOnMobile close={close}>{content}</Dialog>;
