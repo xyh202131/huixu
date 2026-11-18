@@ -11,7 +11,7 @@ import { adoptExecutionPlan, assessExecutionPlan } from '../src/executionPlan.js
 import { signupSnapshot } from '../src/registrationRules.js';
 import { checkCandidate } from '../src/scheduling.js';
 import { workspaceDraft, restoreWorkspaceDraft } from '../src/workspaceDraft.js';
-import { conversationContext } from '../src/agentConversation.js';
+import { conversationContext, executionChoice } from '../src/agentConversation.js';
 import { workItems, agendaHours } from '../src/workItems.js';
 import { createRegistrationStore } from './registrationStore.js';
 import { createAgentHandler, confirmedForHits } from './agent.js';
@@ -19,6 +19,16 @@ import { createAgentHandler, confirmedForHits } from './agent.js';
 function topic() {
   return createTopicEvent({ topic: '秋季论坛', people: [], date: '', target: '150', venue: '', budget: '', audience: '' });
 }
+
+test('对话确认只接受完整、明确且带编号的发布指令', () => {
+  for (const question of ['就按第二个方案执行', '按第2个方案发布。', '请按照方案 ２ 执行！']) {
+    assert.equal(executionChoice(question), 2, question);
+  }
+  for (const question of ['第二个看起来不错', '按第二个方案执行？', '先别按第二个方案执行', '「就按第二个方案执行」',
+    '就按第二个方案执行，顺便发邮件', '就按第二个方案执行\n再给我看看', '执行第二个方案可行吗', '按方案 0 执行']) {
+    assert.equal(executionChoice(question), null, question);
+  }
+});
 
 test('只给主题后分派任务，重复采用保留执行身份与人工进度', () => {
   const event = topic();

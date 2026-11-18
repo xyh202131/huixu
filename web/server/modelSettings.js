@@ -30,7 +30,7 @@ export function connectionFrom(input, saved) {
   const enteredUrl = typeof input.baseUrl === 'string' ? input.baseUrl.trim() : '';
   const baseUrl = preset?.baseUrl ?? enteredUrl;
   const url = baseUrl.length <= 2048 ? modelEndpoint(protocol, baseUrl) : null;
-  if (!url) return { error: '请输入有效的 HTTPS 接口地址，或使用本机 HTTP 地址。' };
+  if (!url) return { error: process.env.HUIXU_HOSTED === '1' ? '请选择创空间已允许的 HTTPS 模型服务。' : '请输入有效的 HTTPS 接口地址，或使用本机 HTTP 地址。' };
 
   const enteredModel = typeof input.model === 'string' ? input.model.trim() : '';
   const model = enteredModel || preset?.model;
@@ -108,24 +108,30 @@ export function createModelSettings(root, env) {
     return row ? JSON.parse(row.config) : null;
   }
 
+  function savedConfig(saved) {
+    const url = saved && modelEndpoint(saved.protocol, saved.baseUrl);
+    return url ? { ...saved, url } : null;
+  }
+
   function getConfig() {
-    const saved = read(settingsTables.chat);
-    return saved ? { ...saved, url: modelEndpoint(saved.protocol, saved.baseUrl) } : fallback;
+    return savedConfig(read(settingsTables.chat)) ?? fallback;
   }
 
   function getOrganizationConfig() {
-    const saved = read(settingsTables.organization);
-    return saved ? { ...saved, url: modelEndpoint(saved.protocol, saved.baseUrl) } : getConfig();
+    return savedConfig(read(settingsTables.organization)) ?? getConfig();
   }
 
   function status(purpose, saved = read(settingsTables[purpose])) {
-    if (saved) return { source: 'workbench', active: publicConfig(saved) };
+    if (savedConfig(saved)) return { source: 'workbench', active: publicConfig(saved) };
+    const invalidFallback = !fallback && (env.HUIXU_LLM_BASE_URL || env.HUIXU_LLM_MODEL || env.HUIXU_LLM_API_KEY);
+    const problem = '服务端模型配置不完整，或接口地址未获允许。请检查运行时模型设置。';
     if (purpose === 'organization') {
       const shared = getConfig();
-      return { source: 'shared', active: shared ? { model: shared.model, protocol: shared.protocol } : null };
+      return { source: 'shared', active: shared ? { model: shared.model, protocol: shared.protocol } : null,
+        ...(!shared && invalidFallback && { problem }) };
     }
     if (fallback) return { source: 'environment', active: { model: fallback.model, protocol: fallback.protocol } };
-    return { source: 'none', active: null };
+    return { source: 'none', active: null, ...(invalidFallback && { problem }) };
   }
 
   async function handle(request, response) {
@@ -153,10 +159,11 @@ export function createModelSettings(root, env) {
       try { input = JSON.parse(body.toString('utf8')); } catch {
         return sendJson(response, 400, { error: '模型设置格式无效。' });
       }
-      const testCurrent = path === '/test' && purpose === 'organization' && input?.useCurrent === true;
-      const { config, reuseKey, error } = testCurrent ? { config: getOrganizationConfig() } : connectionFrom(input, read(table));
+      const testCurrent = path === '/test' && input?.useCurrent === true;
+      const currentConfig = purpose === 'organization' ? getOrganizationConfig : getConfig;
+      const { config, reuseKey, error } = testCurrent ? { config: currentConfig() } : connectionFrom(input, read(table));
       if (error) return sendJson(response, 400, { error });
-      if (!config) return sendJson(response, 400, { error: '请先配置资料整理或 Agent 对话模型。' });
+      if (!config) return sendJson(response, 400, { error: status(purpose).problem || '请先配置当前用途的模型。' });
       if (path === '/test') {
         if (testing) return sendJson(response, 429, { error: '模型连接正在测试，请稍候。' });
         testing = true;

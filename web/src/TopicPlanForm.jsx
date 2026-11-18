@@ -34,7 +34,7 @@ export function TopicPlanForm({ events, initialTopic, create, ownerId }) {
     try {
       const connection = await browserModel('chat', ownerId);
       const response = await fetch(ownerId ? '/api/topic-plan' : '/api/browser-topic-plan', {
-        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        method: 'POST', headers: { 'Content-Type': 'application/json', ...(ownerId && { 'X-Huixu-Account': ownerId }) },
         body: JSON.stringify({ topic, type, audience: input.audience, slots: reference?.slots, lessons: reference?.lessons, connection: connection ?? undefined }), signal: controller.signal,
       });
       if (response.status === 401) window.dispatchEvent(new Event(sessionExpired));

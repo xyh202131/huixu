@@ -5,7 +5,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { test } from 'node:test';
 import { createWorkbenchAuth } from './auth.js';
-import { sendJson } from './localApi.js';
+import { allowHostedRequest, restoreHostedMethod, sendJson } from './localApi.js';
 
 test('首次建号、会话保护和退出撤销', async t => {
   const directory = await mkdtemp(join(tmpdir(), 'huixu-auth-test-'));
@@ -76,4 +76,57 @@ test('首次建号、会话保护和退出撤销', async t => {
     assert.equal(response.status, 401);
   }
   assert.ok(limited, '连续失败的登录请求应触发限流');
+});
+
+test('创空间代理下的首次建号需要初始化码，登录使用 HTTPS 会话', async t => {
+  const directory = await mkdtemp(join(tmpdir(), 'huixu-studio-auth-'));
+  const database = join(directory, 'auth.sqlite');
+  const publicOrigin = 'https://example.ms.show';
+  const setupCode = 'fixture-setup-abcdefghijklmnopqrstuv';
+  const auth = createWorkbenchAuth(process.cwd(), database, { publicOrigin, setupCode });
+  const server = createServer((request, response) => {
+    if (!allowHostedRequest(request, publicOrigin)) return sendJson(response, 403, {});
+    if (request.url === '/setup') {
+      request.url = '/';
+      return auth.session(request, response);
+    }
+    return auth.handle(request, response);
+  });
+  t.after(async () => {
+    await new Promise(resolve => server.close(resolve));
+    auth.close();
+    await unlink(database);
+    await rmdir(directory);
+  });
+  await new Promise(resolve => server.listen(0, '::1', resolve));
+  const url = 'http://[::1]:' + server.address().port;
+  function post(path, input, origin = publicOrigin) {
+    return fetch(url + path, { method: 'POST', headers: { Origin: origin, 'Content-Type': 'application/json' }, body: JSON.stringify(input) });
+  }
+  const credentials = { email: 'owner@example.test', password: 'Fixture-only-studio-123!', name: '创空间负责人' };
+  assert.equal((await post('/setup', { ...credentials, setupCode }, 'https://other.example.test')).status, 403);
+  assert.equal((await post('/setup', credentials)).status, 403);
+  assert.equal((await (await fetch(url + '/setup')).json()).setupCodeRequired, true);
+  assert.equal((await post('/setup', { ...credentials, setupCode })).status, 201);
+  const signIn = await post('/sign-in/email', credentials);
+  assert.equal(signIn.status, 200);
+  const cookies = signIn.headers.getSetCookie();
+  assert.ok(cookies.some(cookie => /; Secure(?:;|$)/i.test(cookie) && cookie.includes('HttpOnly') &&
+    /; SameSite=None(?:;|$)/i.test(cookie) && /; Partitioned(?:;|$)/i.test(cookie)));
+  const cookie = cookies.map(value => value.split(';', 1)[0]).join('; ');
+  const signedIn = await fetch(url + '/setup', { headers: { Cookie: cookie } });
+  assert.equal((await signedIn.json()).user.name, credentials.name);
+});
+
+test('创空间仅允许同源写请求转换受保护接口的方法', () => {
+  const origin = 'https://example.ms.show';
+  const request = { method: 'POST', headers: { origin, 'x-huixu-method': 'PATCH' } };
+  assert.equal(restoreHostedMethod(request, '/api/registration'), false);
+  assert.equal(allowHostedRequest(request, origin), true);
+  assert.equal(restoreHostedMethod(request, '/api/registration-public'), false);
+  assert.equal(restoreHostedMethod(request, '/api/registration'), true);
+  assert.equal(request.method, 'PATCH');
+  const invalid = { method: 'POST', headers: { origin, 'x-huixu-method': 'GET' } };
+  assert.equal(allowHostedRequest(invalid, origin), true);
+  assert.equal(restoreHostedMethod(invalid, '/api/project-memory'), false);
 });

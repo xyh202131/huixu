@@ -3,7 +3,7 @@ import { Dialog, Notice } from './interactions';
 import { localOnlyLink, ownerRegistration } from './registrationClient';
 import { restoreWorkspaceDraft, workspaceDraft } from './workspaceDraft';
 
-export function WorkspaceDraftDialog({ event, update, close, notify }) {
+export function WorkspaceDraftDialog({ event, update, close, notify, ownerId }) {
   const [link, setLink] = useState('');
   const [remote, setRemote] = useState(null);
   const [busy, setBusy] = useState(false);
@@ -13,29 +13,29 @@ export function WorkspaceDraftDialog({ event, update, close, notify }) {
   const localRevision = event.draftRevision ?? 0;
   useEffect(() => {
     const request = new AbortController();
-    ownerRegistration(path, 'GET', undefined, request.signal).then(setRemote).catch(error => {
+    ownerRegistration(path, 'GET', undefined, request.signal, ownerId).then(setRemote).catch(error => {
       if (!request.signal.aborted) setProblem(error.message);
     });
     return () => request.abort();
-  }, [path, localRevision]);
+  }, [path, localRevision, ownerId]);
   async function save() {
     setBusy(true);
     setProblem('');
     try {
-      const saved = await ownerRegistration(path, 'PUT', { revision: localRevision, data: workspaceDraft(event) });
+      const saved = await ownerRegistration(path, 'PUT', { revision: localRevision, data: workspaceDraft(event) }, undefined, ownerId);
       update(current => ({ ...current, draftRevision: saved.revision,
         draftDirty: JSON.stringify(workspaceDraft(current)) !== JSON.stringify(saved.data) }), { syncing: true });
       notify('已保存服务端草稿 r' + saved.revision);
       close();
     } catch (error) {
       setProblem(error.message);
-      if (error.status === 409) setRemote(await ownerRegistration(path).catch(() => null));
+      if (error.status === 409) setRemote(await ownerRegistration(path, 'GET', undefined, undefined, ownerId).catch(() => null));
     } finally { setBusy(false); }
   }
   async function share(method) {
     setBusy(true); setProblem(''); setLink('');
     try {
-      const result = await ownerRegistration('/' + event.id + '/handoff', method);
+      const result = await ownerRegistration('/' + event.id + '/handoff', method, undefined, undefined, ownerId);
       setLink(result.url ?? '');
       if (method === 'DELETE') notify('任务协作链接已撤销');
     } catch (error) { setProblem(error.message); }

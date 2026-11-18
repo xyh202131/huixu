@@ -2,7 +2,7 @@ import { activityTypes } from '../src/model.js';
 import { analyzeMove, checkinPoint, isClock as time } from '../src/scheduling.js';
 import { analyzeRescue, rescueSummary } from '../src/rescueScheduling.js';
 import { isArchiveName } from '../src/sourceFormats.js';
-import { isLocalRequest, readBody, sendJson as send } from './localApi.js';
+import { isWorkbenchRequest, readBody, sendJson as send } from './localApi.js';
 import { requestModel, toolMessages } from './modelProvider.js';
 import { browserConnectionFrom } from './modelSettings.js';
 import { conversationContext } from '../src/agentConversation.js';
@@ -171,6 +171,7 @@ async function runModel(config, question, event, memory, signal, history) {
   const citations = new Map();
   const statusReads = new Set();
   const availableTools = memory ? tools : tools.filter(tool => !['search_project_memory', 'list_project_sources', 'list_archive_members'].includes(tool.function.name));
+  const allowedNames = new Set(availableTools.map(tool => tool.function.name));
   for (let round = 0; round < 4; round += 1) {
     const turn = await requestModel(config, { system, messages, tools: availableTools, final: round === 3, signal });
     if (!turn || turn.calls?.length > 5) break;
@@ -183,6 +184,9 @@ async function runModel(config, question, event, memory, signal, history) {
       const answer = limit(turn.answer, 8000);
       if (answer) return { status: 200, answer, evidence, proposal, usedProjectMemory, citations: [...citations.values()], statusReads: [...statusReads], model: limit(turn.model || config.model) };
       break;
+    }
+    if (calls.some(call => !allowedNames.has(call.name))) {
+      return { status: 502, error: '模型请求了本次对话未提供的工具，本轮操作未执行。请重试。' };
     }
     if (round === 3 || calls.some(call => typeof call.id !== 'string' || typeof call.name !== 'string')) break;
     const results = calls.map(({ id, name, args }) => {
@@ -233,7 +237,7 @@ export function createAgentHandler(getModelConfig, memory) {
   let active = 0;
   return async (request, response, user) => {
     if (request.method !== 'POST') return send(response, 405, { error: '此接口仅接受 POST。' });
-    if (!isLocalRequest(request)) {
+    if (!isWorkbenchRequest(request)) {
       return send(response, 403, { error: 'Agent 演练接口只允许本机工作台访问。' });
     }
     if (request.headers['content-type']?.split(';')[0] !== 'application/json') return send(response, 415, { error: '请求必须是 JSON。' });

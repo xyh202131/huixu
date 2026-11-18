@@ -1,4 +1,4 @@
-import { isLocalRequest, readBody, sendJson } from './localApi.js';
+import { isWorkbenchRequest, readBody, sendJson } from './localApi.js';
 import { organizeSources } from './organizeSources.js';
 import { browserConnectionFrom } from './modelSettings.js';
 
@@ -6,7 +6,7 @@ export function createOrganizationHandler(getModelConfig, memory) {
   const running = new Map();
 
   return async (request, response, user) => {
-    if (!isLocalRequest(request)) return sendJson(response, 403, { error: '智能整理仅供本机工作台访问。' });
+    if (!isWorkbenchRequest(request)) return sendJson(response, 403, { error: '智能整理仅供本机工作台访问。' });
     const eventId = new URL(request.url, 'http://localhost').searchParams.get('event');
     if (!/^[\w-]{1,128}$/.test(eventId ?? '')) return sendJson(response, 400, { error: '请指定有效的活动。' });
     if (!['GET', 'POST'].includes(request.method)) return sendJson(response, 405, { error: '不支持此操作。' });

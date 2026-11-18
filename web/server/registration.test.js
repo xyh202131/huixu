@@ -216,6 +216,36 @@ test('并发审核仅一人占位，发布复查报名并更新公开议程', as
   assert.equal(store.get(owner, eventId).people.find(person => person.status === '已确认').sessionId, 'session-1');
 });
 
+test('重新发布议程会在服务端拒绝不合规的调整', async t => {
+  const { store, event } = await fixture(t);
+  const before = store.get(owner, eventId);
+  const next = signupSnapshot(event);
+  next.version = before.event.version + 1;
+  const session = next.agenda[0];
+  session.room = 'B';
+  session.equipment = ['校验用设备'];
+  const publish = () => store.changeEvent(owner, eventId, { revision: before.revision, event: next }, true);
+  assert.throws(publish, /缺少校验用设备/);
+  session.equipment = [];
+  session.end = session.start;
+  assert.throws(publish, /保留原环节时长/);
+  assert.deepEqual(store.get(owner, eventId).event, before.event);
+});
+
+test('公开报名的字段校验失败计入同场活动的提交限额', async t => {
+  const { store } = await fixture(t);
+  const before = store.get(owner, eventId);
+  store.changeEvent(owner, eventId, { revision: before.revision, shared: true, formOpen: true });
+  const handle = registrationPublicApi(store, '');
+  const origin = await listen(t, handle);
+  const submit = input => fetch(origin + '/events/' + before.publicId, {
+    method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(input),
+  });
+  for (let i = 0; i < 30; i++) assert.equal((await submit({ name: '待补邮箱' })).status, 400);
+  assert.equal((await submit({ name: '演练报名', email: 'fixture-limit@example.test' })).status, 429);
+  assert.equal(store.get(owner, eventId).people.length, 0);
+});
+
 test('确认邮件先预览，仅重试明确失败，服务商回查和邮件链接回流', async t => {
   const { store } = await fixture(t);
   const attendee = add(store, '邮件演练甲', { email: 'to@example.test', status: '已确认' });

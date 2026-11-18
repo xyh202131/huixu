@@ -1,11 +1,11 @@
-import { createHash, randomBytes, randomUUID } from 'node:crypto';
+import { createHash, randomBytes, randomUUID, timingSafeEqual } from 'node:crypto';
 import { mkdirSync } from 'node:fs';
 import { dirname } from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
 import { betterAuth } from 'better-auth';
 import { getMigrations } from 'better-auth/db/migration';
 import { fromNodeHeaders } from 'better-auth/node';
-import { isLocalRequest, readBody, sendJson } from './localApi.js';
+import { isWorkbenchRequest, readBody, sendJson } from './localApi.js';
 import { localDatabasePath } from './localData.js';
 
 const authPath = '/api/auth';
@@ -20,8 +20,9 @@ function authHeaders(request) {
   return headers;
 }
 
-function publicUser(user) {
-  return user ? { id: user.id, name: user.name, email: user.email } : null;
+function codeMatches(input, expected) {
+  const digest = value => createHash('sha256').update(value).digest();
+  return typeof input === 'string' && timingSafeEqual(digest(input), digest(expected));
 }
 
 async function readAccountInput(request) {
@@ -36,11 +37,23 @@ async function readAccountInput(request) {
   return { status: 400, error: '请求内容无效。' };
 }
 
-export function createWorkbenchAuth(root, databaseOverride) {
+export function createWorkbenchAuth(root, databaseOverride, { publicOrigin, setupCode, signupCode } = {}) {
   const databasePath = localDatabasePath(root, databaseOverride, 'auth.sqlite');
   const cookiePrefix = 'huixu-' + createHash('sha256').update(databasePath).digest('hex').slice(0, 10);
   let connection;
   let ready;
+  const registrationEnabled = Boolean(signupCode?.length >= 32 && signupCode !== setupCode);
+
+  function recordPrimaryOwner() {
+    connection.exec(`INSERT OR IGNORE INTO huixu_auth_config (key, value)
+      SELECT 'primary_owner', id FROM "user" ORDER BY "createdAt", id LIMIT 1`);
+  }
+
+  function publicUser(user) {
+    if (!user) return null;
+    const primary = connection.prepare("SELECT value FROM huixu_auth_config WHERE key = 'primary_owner'").get();
+    return { id: user.id, name: user.name, email: user.email, ...(user.id === primary?.value && { legacyWorkspace: true }) };
+  }
 
   async function initialize() {
     mkdirSync(dirname(databasePath), { recursive: true });
@@ -59,17 +72,24 @@ export function createWorkbenchAuth(root, databaseOverride) {
     const auth = betterAuth({
       appName: '会序',
       basePath: authPath,
-      baseURL: { allowedHosts: loopbackHosts, protocol: 'http' },
+      baseURL: publicOrigin || { allowedHosts: loopbackHosts, protocol: 'http' },
+      ...(publicOrigin && { trustedOrigins: [publicOrigin] }),
       database: connection,
       secret,
       emailAndPassword: { enabled: true, autoSignIn: false, minPasswordLength: 12, maxPasswordLength: 128 },
       session: { expiresIn: sessionLifetime, disableSessionRefresh: true },
       rateLimit: { enabled: true, customRules: { '/sign-in/email': { window: 60, max: 8 } } },
-      advanced: { cookiePrefix, ipAddress: { ipAddressHeaders: ['x-huixu-client-ip'] } },
+      advanced: {
+        cookiePrefix,
+        ipAddress: { ipAddressHeaders: ['x-huixu-client-ip'] },
+        // 魔搭账号页和应用分属不同站点。仅云端使用分区 Cookie，允许在创空间内保持会话。
+        ...(publicOrigin && { defaultCookieAttributes: { sameSite: 'none', partitioned: true } }),
+      },
       logger: { disabled: true },
     });
     const migration = await getMigrations(auth.options);
     await migration.runMigrations();
+    recordPrimaryOwner();
     return auth;
   }
 
@@ -90,24 +110,46 @@ export function createWorkbenchAuth(root, databaseOverride) {
   }
 
   function hasOwner() {
-    return Boolean(connection.prepare('SELECT 1 FROM "user" LIMIT 1').get());
+    return Boolean(connection.prepare("SELECT 1 FROM huixu_auth_config WHERE key = 'primary_owner'").get());
   }
 
   async function session(request, response) {
-    if (!isLocalRequest(request)) return sendJson(response, 403, { error: '登录仅供本机工作台访问。' });
-    if (new URL(request.url, 'http://localhost').pathname !== '/') return sendJson(response, 404, { error: '没有此账号操作。' });
-    if (!['GET', 'POST'].includes(request.method)) return sendJson(response, 405, { error: '不支持此操作。' });
+    if (!isWorkbenchRequest(request)) return sendJson(response, 403, { error: '请通过会序工作台访问。' });
+    const path = new URL(request.url, 'http://localhost').pathname;
+    const registering = path === '/register';
+    if (!registering && path !== '/') return sendJson(response, 404, { error: '没有此账号操作。' });
+    if (request.method !== 'POST' && (registering || request.method !== 'GET')) return sendJson(response, 405, { error: '不支持此操作。' });
     try {
       const auth = await getAuth();
-      if (request.method === 'GET') return sendJson(response, 200, { user: await currentUser(request, auth), setupRequired: !hasOwner() });
+      const ownerExists = hasOwner();
+      if (request.method === 'GET') return sendJson(response, 200, { user: await currentUser(request, auth), setupRequired: !ownerExists,
+        ...(publicOrigin && { setupCodeRequired: true }), ...(ownerExists && registrationEnabled && { signupEnabled: true }) });
 
       const data = await readAccountInput(request);
       if (data.error) return sendJson(response, data.status, { error: data.error });
+      if (registering) {
+        if (!ownerExists || !registrationEnabled) return sendJson(response, 403, { error: '当前未开放邀请码注册。' });
+        if (!codeMatches(data.input.signupCode, signupCode)) return sendJson(response, 403, { error: '注册邀请码无效。' });
+        if (await currentUser(request, auth)) return sendJson(response, 409, { error: '请先退出当前账号。' });
+      } else if (publicOrigin && !ownerExists) {
+        if (!setupCode || setupCode.length < 32) return sendJson(response, 503, { error: '请在创空间设置中配置至少 32 位的负责人初始化码。' });
+        if (!codeMatches(data.input.setupCode, setupCode)) return sendJson(response, 403, { error: '负责人初始化码无效。' });
+      }
       const { name, email, password } = data.input;
       if (typeof name !== 'string' || !name.trim() || name.trim().length > 60 || typeof email !== 'string' ||
           !email.trim() || email.trim().length > 254 || typeof password !== 'string' || password.length < 12 || password.length > 128) {
         return sendJson(response, 400, { error: '请填写姓名、邮箱和 12–128 位密码。' });
       }
+      async function createAccount() {
+        const created = await auth.api.signUpEmail({
+          body: { name: name.trim(), email: email.trim().toLowerCase(), password },
+          headers: authHeaders(request), asResponse: true,
+        });
+        if (!created.ok) return sendJson(response, 400, { error: '账号创建失败，请核对邮箱和密码，或使用已有账号登录。' });
+        if (!registering) recordPrimaryOwner();
+        return sendJson(response, 201, { created: true });
+      }
+      if (registering) return await createAccount();
       const token = randomUUID();
       const now = Date.now();
       // 首次设置可能同时从两个页面提交，用数据库租约保证只有一个请求创建账号。
@@ -117,12 +159,7 @@ export function createWorkbenchAuth(root, databaseOverride) {
         WHERE huixu_owner_setup.expires_at < ?`).run(token, now + setupLease, now);
       if (!lease.changes) return sendJson(response, 409, { error: '工作台已有账号，或另一个窗口正在设置账号。' });
       try {
-        const created = await auth.api.signUpEmail({
-          body: { name: name.trim(), email: email.trim().toLowerCase(), password },
-          headers: authHeaders(request), asResponse: true,
-        });
-        if (!created.ok) return sendJson(response, 400, { error: '账号创建失败，请核对邮箱和密码。' });
-        return sendJson(response, 201, { created: true });
+        return await createAccount();
       } finally {
         connection.prepare('DELETE FROM huixu_owner_setup WHERE id = 1 AND token = ?').run(token);
       }
@@ -132,7 +169,7 @@ export function createWorkbenchAuth(root, databaseOverride) {
   }
 
   async function handle(request, response) {
-    if (!isLocalRequest(request)) return sendJson(response, 403, { error: '登录仅供本机工作台访问。' });
+    if (!isWorkbenchRequest(request)) return sendJson(response, 403, { error: '请通过会序工作台访问。' });
     const path = new URL(request.url, 'http://localhost').pathname;
     if (!nativePaths.has(path)) return sendJson(response, 404, { error: '没有此账号操作。' });
     if (request.method !== 'POST') return sendJson(response, 405, { error: '不支持此操作。' });
@@ -141,10 +178,14 @@ export function createWorkbenchAuth(root, databaseOverride) {
       const data = await readAccountInput(request);
       if (data.error) return sendJson(response, data.status, { error: data.error });
       const auth = await getAuth();
+      const requestedAccount = request.headers['x-huixu-account'];
+      if (path === '/sign-out' && requestedAccount !== undefined && requestedAccount !== (await currentUser(request, auth))?.id) {
+        return sendJson(response, 401, { error: '当前账号已切换，正在刷新工作台。' });
+      }
       const headers = authHeaders(request);
       headers.delete('content-length');
       const input = path === '/sign-in/email' ? { email: data.input.email, password: data.input.password } : {};
-      const result = await auth.handler(new Request('http://' + request.headers.host + authPath + path, {
+      const result = await auth.handler(new Request((publicOrigin || 'http://' + request.headers.host) + authPath + path, {
         method: 'POST', headers, body: JSON.stringify(input),
       }));
       const cookies = result.headers.getSetCookie();
@@ -169,12 +210,16 @@ export function createWorkbenchAuth(root, databaseOverride) {
 
   function requireSession(handler) {
     return async (request, response) => {
-      if (!isLocalRequest(request)) return sendJson(response, 403, { error: '此接口仅供本机工作台访问。' });
+      if (!isWorkbenchRequest(request)) return sendJson(response, 403, { error: '请通过会序工作台访问。' });
       if (!request.headers.cookie) return sendJson(response, 401, { error: '请先登录会序。' });
       let user;
       try {
         user = await currentUser(request, await getAuth());
         if (!user) return sendJson(response, 401, { error: '登录已失效，请重新登录。' });
+        const requestedAccount = request.headers['x-huixu-account'];
+        if (requestedAccount !== undefined && requestedAccount !== user.id) {
+          return sendJson(response, 401, { error: '当前账号已切换，请重新打开工作台。' });
+        }
       } catch {
         return sendJson(response, 503, { error: '暂时无法验证登录状态。' });
       }

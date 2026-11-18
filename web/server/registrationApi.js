@@ -1,4 +1,4 @@
-import { isLocalRequest, readBody, sendJson } from './localApi.js';
+import { isWorkbenchRequest, readBody, sendJson } from './localApi.js';
 import { registrationSpreadsheet } from './registrationImport.js';
 import { RegistrationError, validId } from './registrationStore.js';
 
@@ -57,7 +57,9 @@ export function registrationOwnerApi(store, mail) {
       else if (action === 'people' && (method === 'PATCH' && id && !operation || method === 'POST' && !id)) {
         result = store.savePerson(owner, eventId, id, await readJson(request));
       } else if ((action === 'settings' || action === 'schedule') && method === 'PATCH' && !id) {
-        result = store.changeEvent(owner, eventId, await readJson(request, 180000), action === 'schedule');
+        result = store.changeEvent(owner, eventId, await readJson(request, action === 'schedule' ? 512 * 1024 : 180000), action === 'schedule');
+      } else if (action === 'move' && id === 'preview' && method === 'POST' && !operation) {
+        result = store.movePreview(owner, eventId, await readJson(request, 512 * 1024));
       } else if (action === 'checkins' && method === 'POST' && !id) {
         result = store.checkIn(owner, eventId, await readJson(request));
       } else if (action === 'checkins' && method === 'POST' && id === 'migrate' && !operation) {
@@ -67,7 +69,7 @@ export function registrationOwnerApi(store, mail) {
         result = store.recordActual(owner, eventId, await readJson(request));
       } else if (action === 'rescue' && method === 'POST' && !operation) {
         if (id === 'preview') result = store.rescuePreview(owner, eventId, await readJson(request, 512 * 1024));
-        else if (id === 'publish') result = store.publishRescue(owner, eventId, await readJson(request, 128 * 1024));
+        else if (id === 'publish') result = store.publishRescue(owner, eventId, await readJson(request, 512 * 1024));
       } else if (action === 'links' && id && method === 'POST' && !operation) {
         const link = store.issueLink(owner, eventId, id);
         const origin = mail.origin || 'http://' + request.headers.host;
@@ -146,7 +148,7 @@ export function registrationPublicApi(store, origin) {
       }
       if (request.method !== 'POST') throw new RegistrationError(405, '不支持此操作。');
       const requestOrigin = request.headers.origin;
-      if (!isLocalRequest(request) && (!origin || requestOrigin !== origin || request.headers.host !== new URL(origin).host)) {
+      if (!isWorkbenchRequest(request) && (!origin || requestOrigin !== origin || request.headers.host !== new URL(origin).host)) {
         throw new RegistrationError(403, '请从活动确认页提交。');
       }
       if (section === 'guest') {
@@ -168,14 +170,19 @@ export function registrationPublicApi(store, origin) {
       const input = await readJson(request, 4096);
       if (section === 'handoff') return sendJson(response, 200, store.taskHandoff(token, input));
       if (section === 'attendance') return sendJson(response, 200, store.respond(token, input));
+      // 只为真实公开活动保留限流计数，失败报名也消耗该活动的提交次数。
+      store.publicEvent(id);
       const now = Date.now();
-      for (const [key, entry] of attempts) if (entry.until <= now) attempts.delete(key);
+      for (const [key, entry] of attempts) {
+        if (entry.until > now) break;
+        attempts.delete(key);
+      }
       const key = request.socket.remoteAddress + ':' + id;
       const counter = attempts.get(key) ?? { count: 0, until: now + 60000 };
       if (counter.count >= 30) throw new RegistrationError(429, '提交过于频繁，请稍后再试。');
       counter.count += 1;
-      const result = store.publicSignup(id, input);
       attempts.set(key, counter);
+      const result = store.publicSignup(id, input);
       return sendJson(response, 200, result);
     } catch (error) {
       return respondError(response, error);

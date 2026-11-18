@@ -51,6 +51,10 @@ strong { font-weight: 650; }
 .button.soft { background: var(--surface-muted); color: var(--accent); border-color: var(--border); }
 .button.small { min-height: 33px; padding: 5px 10px; font-size: 13px; }
 .icon-button { width: 42px; padding: 0; }
+.icon-button[data-variant='ghost'] { background: transparent; border-color: transparent; }
+.icon-button[data-variant='ghost']:hover:not(:disabled) { color: var(--accent); background: var(--accent-soft); }
+.control-icon.is-spinning { animation: control-spin .8s linear infinite; }
+@keyframes control-spin { to { rotate: 360deg; } }
 .link-button {
   display: inline-flex; align-items: center; justify-content: flex-end; gap: 3px; border: 0; padding: 5px 0;
   background: transparent; color: var(--accent); font-weight: 680; white-space: nowrap;
@@ -110,6 +114,10 @@ button.metric:hover { border-color: var(--accent-border); background: var(--surf
 .icon-tile.blue { background: var(--accent-soft); color: var(--accent); }
 .badge { display: inline-flex; align-items: center; border-radius: 7px; padding: 3px 8px; font-size: 12px; line-height: 1.3; font-weight: 680; white-space: nowrap; }
 .badge.neutral { background: var(--surface-muted); color: var(--muted); }
+.badge.processing { background: var(--accent-soft); color: var(--accent); }
+.badge[data-status] { gap: 5px; }
+.badge[data-status]::before { content: ''; flex: 0 0 6px; height: 6px; border-radius: 50%; background: currentColor; }
+.badge.success[data-status] { background: #e5f4ed; color: #235f4a; }
 
 .split, .role-grid { display: grid; gap: 14px; align-items: start; }
 .split { grid-template-columns: repeat(2, minmax(0, 1fr)); }

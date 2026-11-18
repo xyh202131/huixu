@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
-import { browserModelSettings, modelInput, removeBrowserModel, saveBrowserModel, testBrowserModel } from './browserModels';
+import { checkBrowserConnection, loadModelSettings, modelInput, removeBrowserModel, saveBrowserModel, testServerModel } from './browserModels';
 import { Tabs } from './components';
 import { Dialog, Notice, Popconfirm } from './interactions';
 import { modelPresets } from './modelPresets';
@@ -18,13 +18,29 @@ function settingsFields(provider, saved) {
     keyHeader: preset?.keyHeader ?? 'x-api-key', apiKey: '' };
 }
 
+function modelStatusLabel({ active, shared, server, serverError }) {
+  if (active) {
+    if (shared) return '资料整理沿用当前浏览器的 Agent 对话模型 · ' + active.model;
+    const provider = modelPresets[active.provider]?.label ?? '自定义接口';
+    return '当前使用浏览器配置 · ' + provider + ' · ' + active.model;
+  }
+  if (serverError) return '无法读取服务端模型状态。' + serverError;
+  if (server?.active) {
+    if (server.source === 'shared') return '资料整理沿用服务端的 Agent 对话模型 · ' + server.active.model;
+    const source = server.source === 'environment' ? '服务端默认模型' : '服务端账号配置';
+    return '当前使用' + source + ' · ' + server.active.model;
+  }
+  if (server?.problem) return server.problem;
+  return shared ? '资料整理默认沿用 Agent 对话模型。当前尚未配置模型。' : '当前尚未配置模型。';
+}
+
 function ModelSettingsForm({ purpose, ownerId }) {
   const [status, setStatus] = useState(null);
   const [form, setForm] = useState(() => settingsFields('openai'));
   const [busy, setBusy] = useState('load');
   const [feedback, setFeedback] = useState(null);
   const request = useRef(null);
-  const { active, saved, shared } = status ?? {};
+  const { active, saved, server, serverError } = status ?? {};
   const isOrganization = purpose === 'organization';
   const custom = form.provider === 'custom';
   const keepKey = saved?.apiKey && saved.provider === form.provider && (!custom || (
@@ -42,7 +58,7 @@ function ModelSettingsForm({ purpose, ownerId }) {
     setFeedback(null);
     setBusy('load');
     try {
-      const next = await browserModelSettings(purpose, ownerId);
+      const next = await loadModelSettings(purpose, ownerId, signal);
       if (!signal.aborted) applyStatus(next);
     } catch (error) {
       if (!signal.aborted) setFeedback({ tone: 'error', text: error.message });
@@ -71,7 +87,7 @@ function ModelSettingsForm({ purpose, ownerId }) {
     try {
       if (action === 'remove') {
         await removeBrowserModel(purpose, ownerId);
-        const next = await browserModelSettings(purpose, ownerId);
+        const next = await loadModelSettings(purpose, ownerId, signal);
         if (signal.aborted) return;
         applyStatus(next);
         setFeedback({ tone: 'success', text: '当前浏览器的配置已移除。' });
@@ -80,14 +96,17 @@ function ModelSettingsForm({ purpose, ownerId }) {
       const test = action === 'test' || action === 'test-current';
       const input = action === 'test-current' ? active : modelInput(form, saved);
       if (test) {
-        await testBrowserModel(purpose, input, signal);
+        if (input) await checkBrowserConnection(purpose, input, signal);
+        else await testServerModel(purpose, ownerId, signal);
         if (signal.aborted) return;
         const text = isOrganization ? '资料提取测试通过，两条冲突时间均有原文出处。' : '连接与工具调用测试通过。';
         setFeedback({ tone: 'success', text });
         return;
       }
+      await checkBrowserConnection(purpose, input, signal, { validateOnly: true });
+      if (signal.aborted) return;
       await saveBrowserModel(purpose, input, ownerId);
-      const next = await browserModelSettings(purpose, ownerId);
+      const next = await loadModelSettings(purpose, ownerId, signal);
       if (signal.aborted) return;
       applyStatus(next);
       setFeedback({ tone: 'success', text: '已保存到当前浏览器并启用。' });
@@ -105,17 +124,11 @@ function ModelSettingsForm({ purpose, ownerId }) {
     </>}
   </>;
 
-  let activeLabel = '当前浏览器尚未配置模型。';
-  if (shared) activeLabel = active ? `沿用 Agent 对话模型 · ${active.model}` : '默认沿用 Agent 对话模型。当前尚未配置模型。';
-  else if (active) {
-    const sourceLabel = modelPresets[active.provider]?.label ?? '自定义接口';
-    activeLabel = `当前浏览器使用 ${sourceLabel} · ${active.model}`;
-  }
   return <>
-    <Notice>{activeLabel}</Notice>
-    {shared && active && <div className="actions">
+    <Notice tone={serverError || server?.problem ? 'warning' : undefined}>{modelStatusLabel(status)}</Notice>
+    {(active || server?.active) && <div className="actions">
       <button type="button" className="button small" disabled={Boolean(busy)} onClick={() => submit('test-current')}>
-        {busy === 'test-current' ? '正在测试…' : '测试当前整理模型'}
+        {busy === 'test-current' ? '正在测试…' : isOrganization ? '测试当前整理模型' : '测试当前对话模型'}
       </button>
     </div>}
     <form className="form-stack" aria-busy={Boolean(busy)} onSubmit={event => {
@@ -138,7 +151,7 @@ function ModelSettingsForm({ purpose, ownerId }) {
         <label>API Key{custom && !keepKey ? '（如接口需要）' : ''}<input type="password" autoComplete="off" spellCheck={false}
           required={!custom && !keepKey} maxLength={4096} value={form.apiKey} onChange={event => update('apiKey', event.target.value)}
           placeholder={keepKey ? '已保存，留空沿用' : '填写服务商 API Key'} /></label>
-        <p className="muted">{ownerId ? '保存后，当前账号可使用此接口处理已授权的活动资料。' : '此配置仅供当前浏览器的访客使用。'} 配置和密钥保存在本浏览器，旧版配置需重新填写。</p>
+        <p className="muted">{ownerId ? '在此保存后，当前账号优先使用本浏览器的配置。' : '此配置仅供当前浏览器的访客使用。'} 配置和密钥保存在本浏览器。</p>
         <p className="muted">{isOrganization ? '资料整理可单独配置模型。测试使用演练资料核对冲突字段与原文出处。'
           : '测试使用示例问题验证连接、工具调用和结果回传，可能消耗少量模型额度。'}</p>
       </fieldset>

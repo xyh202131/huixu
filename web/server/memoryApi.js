@@ -1,4 +1,4 @@
-import { isLocalRequest, readBody, sendJson } from './localApi.js';
+import { isWorkbenchRequest, readBody, sendJson } from './localApi.js';
 import { isSupportedSource } from './sourceParser.js';
 import { isArchiveName } from '../src/sourceFormats.js';
 
@@ -8,7 +8,7 @@ const archiveLimit = 48 * 1024 * 1024;
 export function createMemoryHandler(memory) {
   let activeImports = 0;
   return async (request, response) => {
-    if (!isLocalRequest(request)) return sendJson(response, 403, { error: '活动索引仅供本机工作台访问。' });
+    if (!isWorkbenchRequest(request)) return sendJson(response, 403, { error: '活动索引仅供本机工作台访问。' });
     const url = new URL(request.url, 'http://localhost');
     const eventId = url.searchParams.get('event');
     if (!/^[\w-]{1,128}$/.test(eventId ?? '')) return sendJson(response, 400, { error: '请指定有效的活动。' });

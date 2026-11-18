@@ -49,7 +49,8 @@ export async function askModel(question, event, signal, ownerId, history = []) {
     },
   };
   const response = await fetch(ownerId ? '/api/agent' : '/api/browser-agent', {
-    method: 'POST', signal, headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ question, event: snapshot, history, connection: connection ?? undefined }),
+    method: 'POST', signal, headers: { 'Content-Type': 'application/json', ...(ownerId && { 'X-Huixu-Account': ownerId }) },
+    body: JSON.stringify({ question, event: snapshot, history, connection: connection ?? undefined }),
   });
   if (response.status === 401) window.dispatchEvent(new Event(sessionExpired));
   if (!response.headers.get('content-type')?.includes('application/json')) throw new Error('会序模型接口不可用，请通过工作台开发服务启动。');

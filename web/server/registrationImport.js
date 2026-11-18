@@ -12,7 +12,10 @@ export async function registrationSpreadsheet(name, buffer) {
   if (!['.xlsx', '.xls', '.csv', '.tsv'].includes(extname(name).toLowerCase())) {
     throw new RegistrationError(400, '请选择 XLSX、XLS、CSV 或 TSV 名单。');
   }
-  const result = await parseSpreadsheet(name, buffer);
+  const result = await parseSpreadsheet(name, buffer).catch(error => {
+    if (error.status === 429) throw new RegistrationError(429, error.message);
+    throw error;
+  });
   if (!result.sheets) throw new RegistrationError(400, result.error || '名单无法读取，请核对文件格式。');
   const rows = [];
   for (const sheet of result.sheets) {

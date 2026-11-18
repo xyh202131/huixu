@@ -1,5 +1,5 @@
 import { activityTypes } from '../src/model.js';
-import { isLocalRequest, readBody, sendJson } from './localApi.js';
+import { isWorkbenchRequest, readBody, sendJson } from './localApi.js';
 import { requestModel } from './modelProvider.js';
 import { browserConnectionFrom } from './modelSettings.js';
 
@@ -49,7 +49,7 @@ function readSuggestions(value) {
 
 export function createTopicPlanHandler(getModelConfig) {
   return async (request, response, user) => {
-    if (!isLocalRequest(request)) return sendJson(response, 403, { error: '主题起草仅供本机工作台访问。' });
+    if (!isWorkbenchRequest(request)) return sendJson(response, 403, { error: '主题起草仅供本机工作台访问。' });
     if (request.method !== 'POST') return sendJson(response, 405, { error: '不支持此操作。' });
     let input;
     try {

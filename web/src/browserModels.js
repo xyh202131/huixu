@@ -1,4 +1,5 @@
 import { modelPresets } from './modelPresets.js';
+import { sessionExpired } from './authClient.js';
 
 function openModels() {
   return new Promise((resolve, reject) => {
@@ -43,6 +44,31 @@ export async function browserModel(purpose = 'chat', ownerId) {
   return active && ownerId ? { ...active, ownerId } : active;
 }
 
+async function settingsRequest(path, { input, ownerId, signal }) {
+  const headers = {};
+  if (input !== undefined) headers['Content-Type'] = 'application/json';
+  if (ownerId) headers['X-Huixu-Account'] = ownerId;
+  const response = await fetch(path, { method: input === undefined ? 'GET' : 'POST', headers, signal,
+    body: input === undefined ? undefined : JSON.stringify(input), cache: 'no-store' });
+  if (response.status === 401 && ownerId) window.dispatchEvent(new Event(sessionExpired));
+  if (!response.headers.get('content-type')?.includes('application/json')) throw new Error('模型设置服务不可用，请通过会序服务启动工作台。');
+  const result = await response.json();
+  if (!response.ok) throw new Error(result.error || '模型配置操作失败。');
+  return result;
+}
+
+export async function loadModelSettings(purpose, ownerId, signal) {
+  const browser = await browserModelSettings(purpose, ownerId);
+  if (browser.active || !ownerId || signal.aborted) return browser;
+  try {
+    const server = await settingsRequest('/api/model-settings?purpose=' + purpose, { ownerId, signal });
+    return { ...browser, server };
+  } catch (error) {
+    if (signal.aborted) throw error;
+    return { ...browser, serverError: error.message };
+  }
+}
+
 export function modelInput(form, saved) {
   const preset = modelPresets[form.provider];
   if (!preset && form.provider !== 'custom') throw new Error('请选择模型服务商。');
@@ -72,12 +98,10 @@ export function removeBrowserModel(purpose, ownerId) {
   return storedModel(purpose, ownerId, 'remove');
 }
 
-export async function testBrowserModel(purpose, connection, signal) {
-  const response = await fetch('/api/browser-model-test', {
-    method: 'POST', signal, headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ purpose, connection }),
-  });
-  if (!response.headers.get('content-type')?.includes('application/json')) throw new Error('模型测试服务不可用，请通过会序服务启动工作台。');
-  const result = await response.json();
-  if (!response.ok) throw new Error(result.error || '模型连接测试失败。');
-  return result;
+export function checkBrowserConnection(purpose, connection, signal, { validateOnly = false } = {}) {
+  return settingsRequest('/api/browser-model-test', { input: { purpose, connection, validateOnly }, signal });
+}
+
+export function testServerModel(purpose, ownerId, signal) {
+  return settingsRequest('/api/model-settings/test?purpose=' + purpose, { input: { useCurrent: true }, ownerId, signal });
 }

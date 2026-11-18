@@ -2,11 +2,11 @@ import { createHash, createHmac, randomBytes, randomUUID, timingSafeEqual } from
 import { mkdirSync } from 'node:fs';
 import { dirname } from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
-import { initialEvents, activityTypes } from '../src/model.js';
-import { describeRescueImpact } from '../src/changeImpact.js';
+import { initialEvents, activityTypes, publishChange } from '../src/model.js';
+import { changeReviewKey, describeRescueImpact } from '../src/changeImpact.js';
 import { reviewStatuses, reservesSeat } from '../src/registrationRules.js';
-import { analyzeRescue, rescueTitle, validateRescuePlan } from '../src/rescueScheduling.js';
-import { checkCandidate, isClock, sameCandidate } from '../src/scheduling.js';
+import { analyzeRescue, rescueProofVersion, rescueTitle, validateRescuePlan } from '../src/rescueScheduling.js';
+import { analyzeMove, checkCandidate, isClock, minutes, sameCandidate } from '../src/scheduling.js';
 import { localDatabasePath } from './localData.js';
 import { workspaceDraft } from '../src/workspaceDraft.js';
 import { guestRequestStore } from './guestRequests.js';
@@ -150,6 +150,10 @@ export function createRegistrationStore(root, override, now = Date.now) {
       event_id TEXT NOT NULL REFERENCES signup_events(id), id TEXT NOT NULL, version INTEGER NOT NULL,
       proof TEXT NOT NULL, data TEXT NOT NULL, PRIMARY KEY(event_id, id), UNIQUE(event_id, version)
     );
+    CREATE TABLE IF NOT EXISTS signup_move_releases (
+      event_id TEXT NOT NULL REFERENCES signup_events(id), id TEXT NOT NULL, version INTEGER NOT NULL,
+      proof TEXT NOT NULL, data TEXT NOT NULL, PRIMARY KEY(event_id, id), UNIQUE(event_id, version)
+    );
   `);
   db.prepare('INSERT OR IGNORE INTO signup_settings VALUES (?, ?)').run('link-secret', randomBytes(32).toString('base64url'));
   const linkSecret = db.prepare("SELECT value FROM signup_settings WHERE key = 'link-secret'").get().value;
@@ -203,6 +207,8 @@ export function createRegistrationStore(root, override, now = Date.now) {
       checkins: db.prepare('SELECT person_id AS personId, session_id AS sessionId FROM signup_checkins WHERE event_id = ? ORDER BY rowid').all(row.id),
       operations: operationsFor(row.id),
       rescueReleases: db.prepare('SELECT data FROM signup_rescue_releases WHERE event_id = ? ORDER BY version DESC').all(row.id)
+        .map(release => JSON.parse(release.data)),
+      moveReleases: db.prepare('SELECT data FROM signup_move_releases WHERE event_id = ? ORDER BY version DESC').all(row.id)
         .map(release => JSON.parse(release.data)),
     };
   }
@@ -319,7 +325,7 @@ export function createRegistrationStore(root, override, now = Date.now) {
       if (existing) return state(findEvent(event.id, owner));
       db.prepare('INSERT INTO signup_events (id, owner, snapshot, public_id) VALUES (?, ?, ?, ?)')
         .run(event.id, owner, JSON.stringify(event), randomBytes(18).toString('base64url'));
-      if (event.id === 'forum' && event.title === '2026 城市创新论坛') {
+      if ((event.id === 'forum' || event.id === `sample-${owner}-forum`) && event.title === '2026 城市创新论坛') {
         // 示例名单从内置样本初始化，浏览器里已有的编辑可由负责人预览后迁移。
         for (const person of initialEvents()[0].attendees) insertPerson(event.id, person.id, registrationFields(person, event));
       }
@@ -330,6 +336,7 @@ export function createRegistrationStore(root, override, now = Date.now) {
   function changeEvent(owner, eventId, input, schedule = false) {
     return transaction(() => {
       const row = findEvent(eventId, owner);
+      if (schedule && input.move) return publishConfirmedMove(row, input);
       if (row.revision !== input.revision) throw new RegistrationError(409, '报名或活动已更新，请核对后重试。');
       const previous = JSON.parse(row.snapshot);
       let event = previous;
@@ -341,16 +348,32 @@ export function createRegistrationStore(root, override, now = Date.now) {
         if (previous.version === 0) {
           if (!event.capacity) throw new RegistrationError(400, '首次发布须确认活动预计人数和报名总名额。');
           if (!event.date || !event.agenda.length) throw new RegistrationError(400, '首次发布须确认活动日期及议程。');
-          for (const session of event.agenda) {
-            const room = event.rooms.find(item => item.id === session.room);
-            if (!room?.capacity) throw new RegistrationError(400, '请确认会场容量。');
-            const issues = checkCandidate({ ...event, attendees: people, ...operationsFor(eventId) }, { before: session }, session, undefined, undefined, true);
-            if (issues.length) throw new RegistrationError(409, session.title + ' · ' + issues.join('、'));
+        }
+        const operations = operationsFor(eventId);
+        const updated = { ...event, ...operations, attendees: people };
+        const previousSessions = new Map(previous.agenda.map(item => [item.id, item]));
+        const previousRooms = new Map(previous.rooms.map(item => [item.id, item]));
+        const changedRooms = new Set(event.rooms.filter(room => JSON.stringify(room) !== JSON.stringify(previousRooms.get(room.id))).map(room => room.id));
+        for (const session of event.agenda) {
+          const before = previous.version > 0 ? previousSessions.get(session.id) : undefined;
+          const sameSlot = sameCandidate(session, before);
+          if (sameSlot && before.guest === session.guest && before.expected === session.expected &&
+              JSON.stringify(before.equipment) === JSON.stringify(session.equipment) && !changedRooms.has(session.room)) continue;
+          const room = event.rooms.find(item => item.id === session.room);
+          if (!room?.capacity) throw new RegistrationError(400, '请确认会场容量。');
+          if (before && !sameSlot && minutes(before.end) - minutes(before.start) !== minutes(session.end) - minutes(session.start)) {
+            throw new RegistrationError(409, session.title + ' · 调整须保留原环节时长。');
           }
+          const issues = checkCandidate(updated, { before: session }, session, undefined, undefined, true);
+          if (issues.length) throw new RegistrationError(409, session.title + ' · ' + issues.join('、'));
         }
         const sessionIds = new Set(event.agenda.map(item => item.id));
         if (people.some(person => person.sessionId && !sessionIds.has(person.sessionId))) {
           throw new RegistrationError(409, '新议程缺少已有关联报名的场次。');
+        }
+        const checkedSessions = db.prepare("SELECT DISTINCT session_id AS id FROM signup_checkins WHERE event_id = ? AND session_id <> ''").all(eventId);
+        if (Object.keys(operations.actual).some(id => !sessionIds.has(id)) || checkedSessions.some(item => !sessionIds.has(item.id))) {
+          throw new RegistrationError(409, '新议程缺少已记录现场实绩或签到的场次。');
         }
         checkEventCapacity(event, people);
       } else {
@@ -503,25 +526,26 @@ export function createRegistrationStore(root, override, now = Date.now) {
     };
   }
 
-  function rescueEvent(state) {
-    return { ...state.event, ...state.operations, attendees: state.people, checkins: state.checkins };
+  function rescueEvent(state, input) {
+    const event = { ...state.event };
+    const operations = structuredClone(state.operations);
+    applyOperationDraft(event, operations, input);
+    return { ...event, ...operations, attendees: state.people, checkins: state.checkins };
   }
 
-  function mergeOperations(row, input) {
-    if (!input || typeof input !== 'object') return row;
-    const event = JSON.parse(row.snapshot);
-    const operations = operationsFor(row.id);
-    const before = JSON.stringify(operations);
+  function applyOperationDraft(event, operations, input) {
+    if (!input || typeof input !== 'object') return;
     const known = new Set(event.agenda.map(session => session.id));
-    const updates = Array.isArray(input.sessions) ? input.sessions : [];
+    const updates = Array.isArray(input.sessions) ? input.sessions.slice(0, 500) : [];
     event.agenda = event.agenda.map(session => {
       const entry = updates.find(item => item?.id === session.id);
       if (!entry) return session;
       return { ...session, guest: shortText(entry.guest, 80) || session.guest || '待确认',
         equipment: Array.isArray(entry.equipment) ? equipmentList(entry.equipment) : session.equipment ?? [] };
     });
-    for (const [id, actual] of Object.entries(input.actual ?? {})) {
-      if (!known.has(id) || operations.actual[id] || !isClock(actual?.started)) continue;
+    for (const id of known) {
+      const actual = input.actual?.[id];
+      if (operations.actual[id] || !isClock(actual?.started)) continue;
       operations.actual[id] = { started: actual.started };
       if (isClock(actual.ended) && actual.ended >= actual.started) operations.actual[id].ended = actual.ended;
     }
@@ -535,6 +559,14 @@ export function createRegistrationStore(root, override, now = Date.now) {
       if (!replies.get(entry.id)?.guestConfirmed) replies.set(entry.id, record);
     }
     operations.replies = [...replies.values()];
+  }
+
+  function mergeOperations(row, input) {
+    if (!input || typeof input !== 'object') return row;
+    const event = JSON.parse(row.snapshot);
+    const operations = operationsFor(row.id);
+    const before = JSON.stringify(operations);
+    applyOperationDraft(event, operations, input);
     const encoded = JSON.stringify(event);
     if (before === JSON.stringify(operations) && row.snapshot === encoded) return row;
     saveOperations(row.id, operations);
@@ -574,9 +606,9 @@ export function createRegistrationStore(root, override, now = Date.now) {
     const current = transaction(() => {
       const row = findEvent(eventId, owner);
       if (input.revision !== row.revision) throw new RegistrationError(409, '活动或报名已更新，请按最新数据重新计算。');
-      return state(mergeOperations(row, input.operations));
+      return state(row);
     });
-    const event = rescueEvent(current);
+    const event = rescueEvent(current, input.operations);
     if (!event.version) throw new RegistrationError(409, '请先发布活动议程，现场调整基于已发布版本。');
     const analysis = analyzeRescue(event, input.incident);
     if (analysis.error) throw new RegistrationError(400, analysis.error);
@@ -603,10 +635,78 @@ export function createRegistrationStore(root, override, now = Date.now) {
       }
     }
     analysis.plans = analysis.plans.map(plan => ({
-      ...plan, proof: signature(JSON.stringify([eventId, current.revision, incident, plan.moves])),
+      ...plan, proof: rescueProof(event, current.revision, incident, plan.moves),
       impact: describeRescueImpact(event, plan),
     }));
-    return { state: current, analysis, preferredIndex, invalidatedSelection };
+    return { state: current, analysis, preferredIndex, invalidatedSelection, proofVersion: rescueProofVersion };
+  }
+
+  function moveRequest(event, input) {
+    const { changeId, sessionId, closedRoom = '', earliest = '' } = input;
+    const before = event.agenda.find(session => session.id === sessionId);
+    if (!validId(changeId) || !before || (closedRoom && !event.rooms.some(room => room.id === closedRoom)) ||
+        (earliest && !isClock(earliest))) throw new RegistrationError(400, '请核对要调整的场次及限制。');
+    return { id: changeId, sessionId, before, title: before.title + '调整', closedRoom, earliest };
+  }
+
+  function moveProof(event, revision, change, candidate) {
+    // 绑定预览时的具体选项、通知范围和排程依据。
+    return signature(JSON.stringify(['move-v1', event.id, revision, change, candidate,
+      event.agenda, event.actual, event.replies, changeReviewKey(event, change, candidate)]));
+  }
+
+  function movePreview(owner, eventId, input) {
+    const current = transaction(() => state(findEvent(eventId, owner)));
+    if (input.revision !== current.revision || !current.event.version) {
+      throw new RegistrationError(409, '请使用最新已发布议程重新预览。');
+    }
+    const event = rescueEvent(current, input.operations);
+    const change = moveRequest(event, input);
+    if (!event.rooms.some(room => room.id === input.room) || !isClock(input.start)) {
+      throw new RegistrationError(400, '请核对新时间与会场。');
+    }
+    const analysis = analyzeMove(event, change.before, { ...change, room: input.room, start: input.start });
+    for (const option of [analysis.requested, ...analysis.alternatives]) {
+      if (option.issues.length) continue;
+      option.proof = moveProof(event, current.revision, change, option.candidate);
+      option.impact = describeRescueImpact(event, { moves: [{ ...option.candidate, sessionId: change.sessionId }] });
+    }
+    return { analysis, before: change.before, revision: current.revision, version: event.version };
+  }
+
+  function publishConfirmedMove(row, { revision, move, operations }) {
+    const { changeId, candidate, proof } = move;
+    if (!validId(changeId) || typeof proof !== 'string' || !validRoomName(candidate?.room) ||
+        !isClock(candidate.start) || !isClock(candidate.end)) throw new RegistrationError(400, '请先核对调整方案。');
+    const eventId = row.id;
+    const selected = { room: candidate.room, start: candidate.start, end: candidate.end };
+    const previous = db.prepare('SELECT proof FROM signup_move_releases WHERE event_id=? AND id=?').get(eventId, changeId);
+    if (previous) {
+      if (previous.proof !== proof) throw new RegistrationError(409, '这张变更单已发布，请查看发布记录。');
+      return state(row);
+    }
+    if (revision !== row.revision) throw new RegistrationError(409, '报名或活动已更新，请重新预览后确认。');
+    const event = rescueEvent(state(row), operations);
+    const change = moveRequest(event, move);
+    if (moveProof(event, revision, change, selected) !== proof) {
+      throw new RegistrationError(409, '方案与确认预览不一致，请重新核对。');
+    }
+    const base = { ...event, change: { ...change, candidates: [selected] }, history: [], messages: [] };
+    const next = publishChange(base, selected, false, changeReviewKey(event, change, selected));
+    if (next === base) throw new RegistrationError(409, '排程校验未通过，请重新核对。');
+    const { notices, count } = describeRescueImpact(event, { moves: [{ ...selected, sessionId: change.sessionId }] });
+    const release = { ...next.history[0], kind: 'move', notices, count, date: new Date(now()).toISOString() };
+    const saved = snapshot(next);
+    checkEventCapacity(saved, event.attendees);
+    saveOperations(eventId, { actual: event.actual, replies: event.replies });
+    db.prepare('UPDATE signup_events SET snapshot=?, revision=revision+1 WHERE id=?').run(JSON.stringify(saved), eventId);
+    db.prepare('INSERT INTO signup_move_releases VALUES (?,?,?,?,?)').run(eventId, changeId, next.version, proof, JSON.stringify(release));
+    return state(findEvent(eventId, row.owner));
+  }
+
+  function rescueProof(event, revision, incident, moves) {
+    // 预览使用客户端带来的未同步实绩和人员资料，发布时绑定这份合并后的计算依据。
+    return signature(JSON.stringify([rescueProofVersion, event.id, revision, incident, moves, event.agenda, event.actual, event.replies]));
   }
 
   function publishRescue(owner, eventId, input) {
@@ -621,9 +721,9 @@ export function createRegistrationStore(root, override, now = Date.now) {
         return state(row);
       }
       if (input.revision !== row.revision) throw new RegistrationError(409, '报名、现场或议程已更新，请重新计算并核对影响。');
-      const expected = signature(JSON.stringify([eventId, row.revision, input.incident, input.moves]));
+      const event = rescueEvent(state(row), input.operations);
+      const expected = rescueProof(event, row.revision, input.incident, input.moves);
       if (expected !== input.proof) throw new RegistrationError(409, '方案与确认预览不一致，请重新计算。');
-      const event = rescueEvent(state(row));
       const plan = { moves: input.moves };
       const problems = validateRescuePlan(event, input.incident, plan);
       if (problems.length) throw new RegistrationError(409, problems.join('；'));
@@ -636,6 +736,7 @@ export function createRegistrationStore(root, override, now = Date.now) {
       const agenda = event.agenda.map(session => ({ ...session, ...moves.get(session.id) }));
       const next = snapshot({ ...event, version, agenda });
       checkEventCapacity(next, event.attendees);
+      saveOperations(eventId, { actual: event.actual, replies: event.replies });
       db.prepare('UPDATE signup_events SET snapshot = ?, revision = revision + 1 WHERE id = ?').run(JSON.stringify(next), eventId);
       db.prepare('INSERT INTO signup_rescue_releases VALUES (?, ?, ?, ?, ?)')
         .run(eventId, input.changeId, version, input.proof, JSON.stringify(release));
@@ -752,7 +853,7 @@ export function createRegistrationStore(root, override, now = Date.now) {
   return {
     list, open, readDraft, saveDraft, guests, issueHandoff, revokeHandoff, taskHandoff,
     get: (owner, id) => state(findEvent(id, owner)), changeEvent, savePerson, publicEvent, publicSignup,
-    issueLink, revoke, confirmation, respond, importPeople, checkIn, migrateCheckins, recordActual, rescuePreview, publishRescue, close: () => db.close(),
+    issueLink, revoke, confirmation, respond, importPeople, checkIn, migrateCheckins, recordActual, movePreview, rescuePreview, publishRescue, close: () => db.close(),
     mail: { db, now, transaction, findEvent, personFor, tokenFor, issueLink, mailSelect },
   };
 }
