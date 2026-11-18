@@ -69,8 +69,8 @@ export function useWorkspace(account) {
       const unchanged = pending && JSON.stringify(pending.data) === JSON.stringify(remote.data);
       const current = (unchanged ? null : pending?.data) ?? remote.data ?? initialWorkspace(account);
       const conflict = Boolean(pending && !unchanged && pending.revision !== remote.revision);
-      record.current = { revision: conflict ? pending.revision : remote.revision, saved: remote.data, latest: current, conflict, cached: true };
-      record.current.cached = rememberPending(key, record.current);
+      record.current = { revision: conflict ? pending.revision : remote.revision, saved: remote.data, latest: current, conflict };
+      rememberPending(key, record.current);
       setStatus({ phase: conflict ? 'conflict' : current === remote.data ? 'saved' : 'saving' });
       setData(current);
     }).catch(error => {
@@ -83,7 +83,7 @@ export function useWorkspace(account) {
     const current = record.current;
     if (!current || current.latest === data) return;
     current.latest = data;
-    current.cached = rememberPending(key, current);
+    rememberPending(key, current);
     if (!current.conflict) setStatus({ phase: 'saving' });
   }, [data, key]);
 
@@ -100,7 +100,7 @@ export function useWorkspace(account) {
     current.inFlight = workspaceRequest(accountId, { revision: current.revision, data: snapshot }).then(result => {
       current.revision = result.revision;
       current.saved = snapshot;
-      current.cached = rememberPending(key, current);
+      rememberPending(key, current);
       setStatus({ phase: current.latest === snapshot ? 'saved' : 'saving' });
     }).catch(error => {
       current.conflict = error.code === 'WORKSPACE_CONFLICT';
@@ -125,7 +125,11 @@ export function useWorkspace(account) {
     }
     function warn(event) {
       const current = record.current;
-      if (current && current.latest !== current.saved && !current.cached) event.preventDefault();
+      // 标签页缓存只用于当前标签页内恢复，服务器确认保存前仍需提醒。
+      if (current && current.latest !== current.saved) {
+        event.preventDefault();
+        event.returnValue = true;
+      }
     }
     document.addEventListener('visibilitychange', background);
     window.addEventListener('beforeunload', warn);
@@ -153,5 +157,9 @@ export function useWorkspace(account) {
     setTimeout(() => URL.revokeObjectURL(url), 1000);
   }
 
-  return { data, setData, status, flush, retryLoad: () => setAttempt(value => value + 1), discardPending, exportPending };
+  function keepPending() {
+    return !record.current || rememberPending(key, record.current);
+  }
+
+  return { data, setData, status, flush, retryLoad: () => setAttempt(value => value + 1), discardPending, exportPending, keepPending };
 }

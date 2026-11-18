@@ -264,10 +264,13 @@ export function Materials({ event, readOnly, update, notify, navigate, showDesig
       </form></Panel>
     </div>
     <Panel title="沟通记录">
-      {event.messages.length ? <Table headers={['主题', '渠道', '人数', '版本', '结果']}>{event.messages.map(message => <tr key={message.id}>
-        <td>{message.subject}</td><td>{message.channel}</td><td>{message.count}</td><td>{message.version ? 'v' + message.version : '草稿'}</td>
-        <td><Badge tone={message.channel === '救场通知草稿' ? 'amber' : 'success'}>{message.channel === '救场通知草稿' ? '待发送' : '演练已记录'}</Badge></td>
-      </tr>)}</Table> : <Empty>暂无演练通知记录。</Empty>}
+      {event.messages.length ? <Table headers={['主题', '渠道', '人数', '版本', '结果']}>{event.messages.map(message => {
+        const draft = ['救场通知草稿', '议程变更通知草稿'].includes(message.channel);
+        return <tr key={message.id}>
+          <td>{message.subject}</td><td>{message.channel}</td><td>{message.count}</td><td>{message.version ? 'v' + message.version : '草稿'}</td>
+          <td><Badge tone={draft ? 'amber' : 'success'}>{draft ? '待发送' : '演练已记录'}</Badge></td>
+        </tr>;
+      })}</Table> : <Empty>暂无沟通记录。</Empty>}
     </Panel>
     {!readOnly && <RegistrationMailRecords eventId={event.id} registration={registration} />}
     {preview && <Dialog title="通知预览" variant="drawer" close={() => setPreview(null)} footer={(!readOnly || previewNeedsUpdate) && <>

@@ -10,13 +10,13 @@ export function Overview({ event, readOnly, navigate, openImport, openDraft, reg
   const completed = event.tasks.filter(task => task.done).length;
   const { sources, changes } = workItems(event);
   const sessions = event.agenda.toSorted((a, b) => a.start.localeCompare(b.start));
-  const { current, next } = liveAgenda(event, sessions);
+  const rooms = liveAgenda(event, sessions);
   let primary = ['查看议程', 'schedule'];
   if (topicDraft) primary = event.executionPlan ? ['继续排程', 'schedule/execution'] : ['编辑活动方案', 'schedule/plan'];
   else if (sources.length) primary = ['核对待确认资料', sources[0].route];
   if (event.onsite) primary = ['打开现场总控', 'live'];
   const agendaRows = event.onsite
-    ? [[current, '当前'], [next, '下一场']].filter(([item]) => item)
+    ? rooms.flatMap(({ current, next }) => [[current, '当前'], [next, '下一场']]).filter(([item]) => item)
     : sessions.slice(0, 4).map(item => [item, '']);
   const stats = [
     [UsersRound, 'success', '确认报名', participantCount(event) + ' / ' + (topicDraft && !event.capacity ? '待定' : event.capacity), '已确认报名人数 / 目标人数', 'registration'],

@@ -1,4 +1,4 @@
-import { randomUUID } from 'node:crypto';
+import { createCipheriv, createDecipheriv, randomBytes, randomUUID } from 'node:crypto';
 import { mkdirSync } from 'node:fs';
 import { dirname } from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
@@ -80,20 +80,38 @@ export async function testOrganization(config, signal) {
   return foundBoth ? '' : '资料提取测试未识别两条带出处的冲突时间，请检查模型的工具调用和结构化提取能力。';
 }
 
-export function createModelSettings(root, env) {
+export function createModelSettings(root, env, storageKey, platformModel) {
   const path = localDatabasePath(root, env.HUIXU_MODEL_DB, 'model-settings.sqlite');
-  const fallback = readModelConfig(env);
+  const fallback = platformModel ?? readModelConfig(env);
   let db;
   let testing = false;
 
+  function serialize(table, { key, ...settings }) {
+    if (!key) return JSON.stringify(settings);
+    const nonce = randomBytes(12);
+    // 认证信息包含用途，防止密文从对话配置复制到资料整理配置后仍能解密。
+    const cipher = createCipheriv('aes-256-gcm', storageKey, nonce);
+    cipher.setAAD(Buffer.from(table));
+    const ciphertext = Buffer.concat([cipher.update(key, 'utf8'), cipher.final()]);
+    return JSON.stringify({ ...settings, encryptedKey: {
+      nonce: nonce.toString('base64url'), ciphertext: ciphertext.toString('base64url'), tag: cipher.getAuthTag().toString('base64url'),
+    } });
+  }
+
   function connection() {
     if (db) return db;
-    mkdirSync(dirname(path), { recursive: true });
+    mkdirSync(dirname(path), { recursive: true, mode: 0o700 });
     const next = new DatabaseSync(path);
     try {
       next.exec(`PRAGMA busy_timeout = 5000; PRAGMA secure_delete = ON;`);
       for (const table of Object.values(settingsTables)) {
         next.exec(`CREATE TABLE IF NOT EXISTS ${table} (id INTEGER PRIMARY KEY CHECK (id = 1), config TEXT NOT NULL);`);
+        const row = next.prepare(`SELECT config FROM ${table} WHERE id = 1`).get();
+        const saved = row && JSON.parse(row.config);
+        if (saved && Object.hasOwn(saved, 'key')) {
+          // 只转换当前账号原有的明文行，并校验旧值，保留同时提交的新配置。
+          next.prepare(`UPDATE ${table} SET config = ? WHERE id = 1 AND config = ?`).run(serialize(table, saved), row.config);
+        }
       }
     } catch (error) {
       next.close();
@@ -105,7 +123,16 @@ export function createModelSettings(root, env) {
 
   function read(table) {
     const row = connection().prepare(`SELECT config FROM ${table} WHERE id = 1`).get();
-    return row ? JSON.parse(row.config) : null;
+    const saved = row && JSON.parse(row.config);
+    if (!saved) return null;
+    const { encryptedKey, ...settings } = saved;
+    if (!encryptedKey) return { ...settings, key: '' };
+    const { nonce, ciphertext, tag } = encryptedKey;
+    const decipher = createDecipheriv('aes-256-gcm', storageKey, Buffer.from(nonce, 'base64url'));
+    decipher.setAAD(Buffer.from(table));
+    decipher.setAuthTag(Buffer.from(tag, 'base64url'));
+    const key = Buffer.concat([decipher.update(Buffer.from(ciphertext, 'base64url')), decipher.final()]).toString('utf8');
+    return { ...settings, key };
   }
 
   function savedConfig(saved) {
@@ -113,8 +140,12 @@ export function createModelSettings(root, env) {
     return url ? { ...saved, url } : null;
   }
 
+  function getPersonalConfig() {
+    return savedConfig(read(settingsTables.chat));
+  }
+
   function getConfig() {
-    return savedConfig(read(settingsTables.chat)) ?? fallback;
+    return getPersonalConfig() ?? fallback;
   }
 
   function getOrganizationConfig() {
@@ -130,7 +161,7 @@ export function createModelSettings(root, env) {
       return { source: 'shared', active: shared ? { model: shared.model, protocol: shared.protocol } : null,
         ...(!shared && invalidFallback && { problem }) };
     }
-    if (fallback) return { source: 'environment', active: { model: fallback.model, protocol: fallback.protocol } };
+    if (fallback) return { source: platformModel ? 'platform' : 'environment', active: { model: fallback.model, protocol: fallback.protocol } };
     return { source: 'none', active: null, ...(invalidFallback && { problem }) };
   }
 
@@ -147,7 +178,9 @@ export function createModelSettings(root, env) {
     try {
       if (method === 'GET') return sendJson(response, 200, status(purpose));
       if (method === 'DELETE') {
-        connection().prepare(`DELETE FROM ${table} WHERE id = 1`).run();
+        // 保留空记录，避免其他浏览器随后把已移除的旧 Key 再次导入。
+        connection().prepare(`INSERT INTO ${table} (id, config) VALUES (1, 'null')
+          ON CONFLICT(id) DO UPDATE SET config = excluded.config`).run();
         return sendJson(response, 200, status(purpose));
       }
       if (request.headers['content-type']?.split(';', 1)[0] !== 'application/json') {
@@ -186,7 +219,11 @@ export function createModelSettings(root, env) {
 
       const { url, ...settings } = config;
       const saved = { ...settings, revision: randomUUID() };
-      const data = JSON.stringify(saved);
+      const data = serialize(table, saved);
+      if (input.importLegacy === true) {
+        connection().prepare(`INSERT OR IGNORE INTO ${table} (id, config) VALUES (1, ?)`).run(data);
+        return sendJson(response, 200, status(purpose));
+      }
       if (reuseKey) {
         const result = connection().prepare(`UPDATE ${table} SET config = ?
           WHERE id = 1 AND json_extract(config, '$.revision') = ?`).run(data, input.keyRevision);
@@ -206,5 +243,5 @@ export function createModelSettings(root, env) {
     db = undefined;
   }
 
-  return { getConfig, getOrganizationConfig, handle, close };
+  return { getConfig, getPersonalConfig, getOrganizationConfig, handle, close };
 }

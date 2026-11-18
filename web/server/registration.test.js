@@ -4,7 +4,7 @@ import { createServer } from 'node:http';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { test } from 'node:test';
-import { exampleEvent, participantCount } from '../src/model.js';
+import { exampleEvent, liveAgenda, participantCount } from '../src/model.js';
 import { signupSnapshot } from '../src/registrationRules.js';
 import { guestUploadLimiter, registrationOwnerApi, registrationPublicApi } from './registrationApi.js';
 import { createRegistrationMail } from './registrationMail.js';
@@ -78,6 +78,34 @@ async function listen(t, handler) {
   t.after(() => new Promise(resolve => server.close(resolve)));
   return 'http://127.0.0.1:' + server.address().port;
 }
+
+test('两个会场可并行记录实绩，并独立显示当前和下一环节', async t => {
+  const { store, open, event } = await fixture(t);
+  const [first, second, third, fourth] = event.agenda;
+  second.room = 'B';
+  second.start = first.start;
+  second.end = '10:00';
+  fourth.room = 'B';
+  event.rooms.find(room => room.id === 'B').equipment.push('无线麦克风');
+  const { revision } = store.get(owner, eventId);
+  const published = store.changeEvent(owner, eventId, { revision, event: signupSnapshot({ ...event, version: 2 }) }, true);
+
+  const a = store.recordActual(owner, eventId, { revision: published.revision, sessionId: first.id, action: 'start', time: '09:00' });
+  assert.throws(() => store.recordActual(owner, eventId, {
+    revision: a.revision, sessionId: third.id, action: 'start', time: '09:01',
+  }), /同一会场/);
+  const other = open();
+  const b = other.recordActual(owner, eventId, { revision: a.revision, sessionId: second.id, action: 'start', time: '09:00' });
+  const sameStart = other.recordActual(owner, eventId, { revision: b.revision, sessionId: second.id, action: 'start', time: '09:00' });
+  assert.equal(sameStart.revision, b.revision);
+  const snapshot = store.get(owner, eventId);
+  assert.deepEqual(liveAgenda(snapshot.operations, snapshot.event.agenda).map(({ room, current, next }) =>
+    [room, current?.id, next?.id]), [['A', first.id, third.id], ['B', second.id, fourth.id]]);
+
+  const ended = store.recordActual(owner, eventId, { revision: snapshot.revision, sessionId: first.id, action: 'end', time: '09:20' });
+  assert.deepEqual(liveAgenda(ended.operations, ended.event.agenda).map(({ current }) => current?.id), [undefined, second.id]);
+  assert.equal(ended.operations.actual[second.id].ended, undefined);
+});
 
 test('报名保存后跨连接可读，竞争同一分场时只保留一个名额', async t => {
   const { store, open, event } = await fixture(t);
@@ -280,4 +308,56 @@ test('确认邮件先预览，仅重试明确失败，服务商回查和邮件�
   assert.equal(store.respond(token, { action: 'confirm' }).person.id, attendee.id);
   assert.equal((await post('/' + preview.id + '/refresh')).records[0].status, 'delivered');
   assert.equal(store.get(owner, eventId).people[0].attendance, '确认出席');
+});
+
+test('确认邮件区分测试域限制、服务受理及仅发送密钥，并通过公开入口回写原报名', async t => {
+  const { store } = await fixture(t);
+  const attendee = add(store, '虚构收件人', { email: 'viewer@example.test', status: '已确认' });
+  const providerRequests = [];
+  const endpoint = await listen(t, async (request, response) => {
+    response.setHeader('Content-Type', 'application/json');
+    if (request.method === 'GET') {
+      response.writeHead(401).end(JSON.stringify({ name: 'restricted_api_key', message: 'provider-only details' }));
+      return;
+    }
+    const requestBody = Buffer.concat(await Array.fromAsync(request)).toString();
+    const email = JSON.parse(requestBody);
+    providerRequests.push(email);
+    if (email.from.includes('@resend.dev')) {
+      response.writeHead(403).end(JSON.stringify({ name: 'validation_error', message: 'provider-only details' }));
+      return;
+    }
+    response.end(JSON.stringify({ id: 'mock-send-only-provider-id' }));
+  });
+  const publicOrigin = 'https://events.example.test';
+  const env = { HUIXU_PUBLIC_ORIGIN: publicOrigin, HUIXU_RESEND_API_KEY: 'fixture-key' };
+  const unconfigured = createRegistrationMail(store, env, endpoint).records(owner, eventId);
+  assert.equal(unconfigured.configured, false);
+  assert.equal(unconfigured.reason, '请先配置已验证的发件地址。');
+
+  const demoMail = createRegistrationMail(store, { ...env, HUIXU_MAIL_FROM: '会序 <onboarding@resend.dev>' }, endpoint);
+  const demoPreview = demoMail.preview(owner, eventId, attendee.id);
+  const rejected = (await demoMail.send(owner, eventId, demoPreview.id)).records[0];
+  assert.equal(rejected.status, 'failed');
+  assert.match(rejected.error, /只能发给账号绑定的邮箱/);
+  assert.doesNotMatch(rejected.error, /provider-only details/);
+
+  const mail = createRegistrationMail(store, { ...env, HUIXU_MAIL_FROM: 'owner@example.test' }, endpoint);
+  const preview = mail.preview(owner, eventId, attendee.id);
+  const result = (await mail.send(owner, eventId, preview.id)).records[0];
+  assert.equal(result.status, 'accepted');
+  assert.deepEqual(providerRequests[1].to, [attendee.email]);
+  await assert.rejects(mail.refresh(owner, eventId, preview.id), { status: 409, message: /密钥仅允许发信/ });
+  assert.equal(mail.records(owner, eventId).records[0].status, 'accepted');
+
+  const publicService = await listen(t, registrationPublicApi(store, ''));
+  const token = new URL(providerRequests[1].text.split('\n').at(-1)).hash.slice('#/attendance/'.length);
+  const headers = { 'X-Huixu-Confirmation': token };
+  const view = await fetch(publicService + '/attendance', { headers });
+  assert.equal((await view.json()).person.id, attendee.id);
+  const response = await fetch(publicService + '/attendance', {
+    method: 'POST', headers: { ...headers, 'Content-Type': 'application/json' }, body: JSON.stringify({ action: 'confirm' }),
+  });
+  assert.equal(response.status, 200);
+  assert.deepEqual(store.get(owner, eventId).people.map(person => [person.id, person.attendance]), [[attendee.id, '确认出席']]);
 });

@@ -116,9 +116,15 @@ export function participantCount(event, sessionId) {
 }
 
 export function liveAgenda(event, sessions) {
-  const current = sessions.find(item => event.actual[item.id]?.started && !event.actual[item.id]?.ended);
-  const next = sessions.find(item => !event.actual[item.id]?.started);
-  return { current, next };
+  const rooms = new Map();
+  for (const session of sessions) {
+    if (!rooms.has(session.room)) rooms.set(session.room, { room: session.room });
+    const progress = rooms.get(session.room);
+    const actual = event.actual[session.id];
+    if (!actual?.started) progress.next ??= session;
+    else if (!actual.ended) progress.current ??= session;
+  }
+  return [...rooms.values()];
 }
 
 export function makeChange(session, candidates, reason, closedRoom = '', earliest = '') {

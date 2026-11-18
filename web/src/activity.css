@@ -74,6 +74,8 @@
 .activity-workspace .page-head :is(h2, h3) { margin-bottom: 5px; font-weight: 750; line-height: 1.22; letter-spacing: -.025em; }
 .activity-workspace .page-head h2 { font-size: clamp(24px, 3vw, 31px); }
 .activity-workspace .page-head h3 { font-size: 22px; }
+.prep-row-edit { display: inline-flex; gap: 7px; align-items: center; text-align: start; }
+.prep-row-edit svg { flex: none; }
 .activity-file-history {
   padding: 11px 15px; border: 1px solid var(--border); border-radius: var(--radius); background: var(--white);
 }
@@ -217,15 +219,19 @@
 .agent-question { justify-self: end; max-width: 100%; background: var(--accent-soft); }
 .agent-answer { background: var(--surface-hover); }
 .agent-compose {
-  display: flex; align-items: flex-end; gap: 8px; margin: 10px var(--agent-inset) 14px; padding: 7px;
+  display: grid; gap: 4px; margin: 10px var(--agent-inset) 14px; padding: 7px;
   border: 1px solid var(--control-border); border-radius: 10px; background: var(--white);
 }
 .agent-compose:focus-within { border-color: var(--focus); box-shadow: 0 0 0 2px var(--accent-soft); }
 .agent-compose textarea {
-  flex: 1; min-width: 0; resize: none; border: 0; padding: 4px; background: transparent; color: var(--ink);
+  min-width: 0; resize: none; border: 0; padding: 4px; background: transparent; color: var(--ink);
   font-size: 14px; line-height: 1.5;
 }
 .agent-compose textarea:focus-visible { outline: none; }
+.agent-compose-actions { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+.agent-compose-actions .compact-select { margin: 0; max-width: calc(100% - 52px); }
+.agent-compose-actions .compact-select .select-trigger { min-height: 36px; padding-block: 4px; font-size: 12px; }
+.agent-compose-actions .select-trigger > svg { flex-shrink: 0; }
 .agent-compose .icon-button { width: 36px; min-height: 36px; }
 .dialog.agent-drawer { --agent-inset: 15px; height: min(620px, calc(100dvh - 88px)); }
 .dialog.agent-drawer .dialog-body { grid-template-rows: auto minmax(0, 1fr) auto; gap: 0; padding: 0; overflow: hidden; }
@@ -286,6 +292,7 @@
   .activity-workspace .overview-event { min-height: 0; padding: 15px 13px; }
   .overview-event-actions .button { padding-inline: 7px; font-size: 13px; }
   .activity-workspace :is(.page-head, .form-stack) .button { min-height: 44px; }
+  .activity-workspace .prep-row-edit { min-height: 44px; }
   :is(.activity-shell, .dialog, .public-event, .external-page) .form-stack :is(input, textarea, select) { font-size: 16px; }
   :is(.activity-shell, .dialog) :is(a, button) { touch-action: manipulation; }
   .activity-shell .mobile-activity-nav, .activity-shell .mobile-activity-nav :is(a, button) { touch-action: pan-y; user-select: none; -webkit-user-select: none; }
@@ -323,6 +330,7 @@
   .dialog.mobile-fullscreen:not(.agent-drawer) .dialog-body { padding-bottom: max(20px, env(safe-area-inset-bottom)); }
   .agent-compose { margin-bottom: max(14px, env(safe-area-inset-bottom)); }
   .agent-compose textarea { font-size: 16px; }
+  .agent-compose-actions .compact-select .select-trigger { min-height: 44px; }
   .agent-compose .icon-button { width: 44px; min-height: 44px; }
   .agent-transcript .button { min-height: 44px; }
   .live-runbook-list { display: grid; gap: 8px; padding: 0; margin: 0; list-style: none; }

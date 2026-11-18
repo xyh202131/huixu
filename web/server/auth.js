@@ -1,4 +1,4 @@
-import { createHash, randomBytes, randomUUID, timingSafeEqual } from 'node:crypto';
+import { createHash, createHmac, randomBytes, randomUUID, timingSafeEqual } from 'node:crypto';
 import { mkdirSync } from 'node:fs';
 import { dirname } from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
@@ -37,12 +37,12 @@ async function readAccountInput(request) {
   return { status: 400, error: '请求内容无效。' };
 }
 
-export function createWorkbenchAuth(root, databaseOverride, { publicOrigin, setupCode, signupCode } = {}) {
+export function createWorkbenchAuth(root, databaseOverride, { publicOrigin, ownerEmail, ownerPassword, signupCode } = {}) {
   const databasePath = localDatabasePath(root, databaseOverride, 'auth.sqlite');
   const cookiePrefix = 'huixu-' + createHash('sha256').update(databasePath).digest('hex').slice(0, 10);
   let connection;
   let ready;
-  const registrationEnabled = Boolean(signupCode?.length >= 32 && signupCode !== setupCode);
+  const registrationEnabled = Boolean(signupCode?.length >= 32 && signupCode !== ownerPassword);
 
   function recordPrimaryOwner() {
     connection.exec(`INSERT OR IGNORE INTO huixu_auth_config (key, value)
@@ -68,6 +68,7 @@ export function createWorkbenchAuth(root, databaseOverride, { publicOrigin, setu
       );
     `);
     connection.prepare('INSERT OR IGNORE INTO huixu_auth_config VALUES (?, ?)').run('secret', randomBytes(32).toString('base64url'));
+    connection.prepare('INSERT OR IGNORE INTO huixu_auth_config VALUES (?, ?)').run('model_storage_secret', randomBytes(32).toString('base64url'));
     const { value: secret } = connection.prepare('SELECT value FROM huixu_auth_config WHERE key = ?').get('secret');
     const auth = betterAuth({
       appName: '会序',
@@ -90,6 +91,12 @@ export function createWorkbenchAuth(root, databaseOverride, { publicOrigin, setu
     const migration = await getMigrations(auth.options);
     await migration.runMigrations();
     recordPrimaryOwner();
+    if (publicOrigin && !hasOwner()) {
+      const email = ownerEmail?.trim().toLowerCase();
+      if (email && email.length <= 254 && ownerPassword?.length >= 12 && ownerPassword.length <= 128) {
+        await createPrimaryOwner(auth, { name: '负责人', email, password: ownerPassword }, new Headers({ Origin: publicOrigin }));
+      }
+    }
     return auth;
   }
 
@@ -113,17 +120,38 @@ export function createWorkbenchAuth(root, databaseOverride, { publicOrigin, setu
     return Boolean(connection.prepare("SELECT 1 FROM huixu_auth_config WHERE key = 'primary_owner'").get());
   }
 
+  async function createPrimaryOwner(auth, body, headers) {
+    const token = randomUUID();
+    const now = Date.now();
+    // 共享同一数据库的进程使用租约，确保只有一个进程创建首位负责人。
+    const lease = connection.prepare(`INSERT INTO huixu_owner_setup (id, token, expires_at)
+      SELECT 1, ?, ? WHERE NOT EXISTS (SELECT 1 FROM "user")
+      ON CONFLICT(id) DO UPDATE SET token = excluded.token, expires_at = excluded.expires_at
+      WHERE huixu_owner_setup.expires_at < ?`).run(token, now + setupLease, now);
+    if (!lease.changes) return null;
+    try {
+      const created = await auth.api.signUpEmail({ body, headers, asResponse: true });
+      if (created.ok) recordPrimaryOwner();
+      return created;
+    } finally {
+      connection.prepare('DELETE FROM huixu_owner_setup WHERE id = 1 AND token = ?').run(token);
+    }
+  }
+
   async function session(request, response) {
     if (!isWorkbenchRequest(request)) return sendJson(response, 403, { error: '请通过会序工作台访问。' });
     const path = new URL(request.url, 'http://localhost').pathname;
     const registering = path === '/register';
     if (!registering && path !== '/') return sendJson(response, 404, { error: '没有此账号操作。' });
     if (request.method !== 'POST' && (registering || request.method !== 'GET')) return sendJson(response, 405, { error: '不支持此操作。' });
+    if (publicOrigin && request.method === 'POST' && !registering) {
+      return sendJson(response, 403, { error: '线上工作台的首位负责人由部署端预设，请用已配置的邮箱和密码登录。' });
+    }
     try {
       const auth = await getAuth();
       const ownerExists = hasOwner();
-      if (request.method === 'GET') return sendJson(response, 200, { user: await currentUser(request, auth), setupRequired: !ownerExists,
-        ...(publicOrigin && { setupCodeRequired: true }), ...(ownerExists && registrationEnabled && { signupEnabled: true }) });
+      if (request.method === 'GET') return sendJson(response, 200, { user: await currentUser(request, auth), setupRequired: !publicOrigin && !ownerExists,
+        ...(publicOrigin && !ownerExists && { ownerSetupPending: true }), ...(ownerExists && registrationEnabled && { signupEnabled: true }) });
 
       const data = await readAccountInput(request);
       if (data.error) return sendJson(response, data.status, { error: data.error });
@@ -131,38 +159,20 @@ export function createWorkbenchAuth(root, databaseOverride, { publicOrigin, setu
         if (!ownerExists || !registrationEnabled) return sendJson(response, 403, { error: '当前未开放邀请码注册。' });
         if (!codeMatches(data.input.signupCode, signupCode)) return sendJson(response, 403, { error: '注册邀请码无效。' });
         if (await currentUser(request, auth)) return sendJson(response, 409, { error: '请先退出当前账号。' });
-      } else if (publicOrigin && !ownerExists) {
-        if (!setupCode || setupCode.length < 32) return sendJson(response, 503, { error: '请在创空间设置中配置至少 32 位的负责人初始化码。' });
-        if (!codeMatches(data.input.setupCode, setupCode)) return sendJson(response, 403, { error: '负责人初始化码无效。' });
       }
       const { name, email, password } = data.input;
       if (typeof name !== 'string' || !name.trim() || name.trim().length > 60 || typeof email !== 'string' ||
           !email.trim() || email.trim().length > 254 || typeof password !== 'string' || password.length < 12 || password.length > 128) {
         return sendJson(response, 400, { error: '请填写姓名、邮箱和 12–128 位密码。' });
       }
-      async function createAccount() {
-        const created = await auth.api.signUpEmail({
-          body: { name: name.trim(), email: email.trim().toLowerCase(), password },
-          headers: authHeaders(request), asResponse: true,
-        });
-        if (!created.ok) return sendJson(response, 400, { error: '账号创建失败，请核对邮箱和密码，或使用已有账号登录。' });
-        if (!registering) recordPrimaryOwner();
-        return sendJson(response, 201, { created: true });
-      }
-      if (registering) return await createAccount();
-      const token = randomUUID();
-      const now = Date.now();
-      // 首次设置可能同时从两个页面提交，用数据库租约保证只有一个请求创建账号。
-      const lease = connection.prepare(`INSERT INTO huixu_owner_setup (id, token, expires_at)
-        SELECT 1, ?, ? WHERE NOT EXISTS (SELECT 1 FROM "user")
-        ON CONFLICT(id) DO UPDATE SET token = excluded.token, expires_at = excluded.expires_at
-        WHERE huixu_owner_setup.expires_at < ?`).run(token, now + setupLease, now);
-      if (!lease.changes) return sendJson(response, 409, { error: '工作台已有账号，或另一个窗口正在设置账号。' });
-      try {
-        return await createAccount();
-      } finally {
-        connection.prepare('DELETE FROM huixu_owner_setup WHERE id = 1 AND token = ?').run(token);
-      }
+      const body = { name: name.trim(), email: email.trim().toLowerCase(), password };
+      const headers = authHeaders(request);
+      const created = registering
+        ? await auth.api.signUpEmail({ body, headers, asResponse: true })
+        : await createPrimaryOwner(auth, body, headers);
+      if (!created) return sendJson(response, 409, { error: '工作台已有账号，或另一个窗口正在设置账号。' });
+      if (!created.ok) return sendJson(response, 400, { error: '账号创建失败，请核对邮箱和密码，或使用已有账号登录。' });
+      return sendJson(response, 201, { created: true });
     } catch {
       if (!response.headersSent) sendJson(response, 500, { error: '本机账号服务暂时不可用。' });
     }
@@ -208,7 +218,12 @@ export function createWorkbenchAuth(root, databaseOverride, { publicOrigin, setu
     }
   }
 
-  function requireSession(handler) {
+  function modelStorageKey(accountId) {
+    const secret = connection.prepare("SELECT value FROM huixu_auth_config WHERE key = 'model_storage_secret'").get().value;
+    return createHmac('sha256', Buffer.from(secret, 'base64url')).update(accountId).digest();
+  }
+
+  function requireSession(handler, { bindAccount = false } = {}) {
     return async (request, response) => {
       if (!isWorkbenchRequest(request)) return sendJson(response, 403, { error: '请通过会序工作台访问。' });
       if (!request.headers.cookie) return sendJson(response, 401, { error: '请先登录会序。' });
@@ -217,7 +232,7 @@ export function createWorkbenchAuth(root, databaseOverride, { publicOrigin, setu
         user = await currentUser(request, await getAuth());
         if (!user) return sendJson(response, 401, { error: '登录已失效，请重新登录。' });
         const requestedAccount = request.headers['x-huixu-account'];
-        if (requestedAccount !== undefined && requestedAccount !== user.id) {
+        if ((bindAccount || requestedAccount !== undefined) && requestedAccount !== user.id) {
           return sendJson(response, 401, { error: '当前账号已切换，请重新打开工作台。' });
         }
       } catch {
@@ -233,5 +248,5 @@ export function createWorkbenchAuth(root, databaseOverride, { publicOrigin, setu
     ready = undefined;
   }
 
-  return { handle, session, requireSession, close };
+  return { handle, session, requireSession, modelStorageKey, close };
 }

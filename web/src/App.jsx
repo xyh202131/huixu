@@ -17,7 +17,8 @@ import { WorkspaceDraftDialog } from './WorkspaceDraftDialog';
 import { TeamBoard } from './TeamBoard';
 import { draftChanged, restoreWorkspaceDraft } from './workspaceDraft';
 import { ChangePage, Schedule, Sources } from './Plan';
-import { External, ExternalForm, Preparation } from './PrepExternal';
+import { External, ExternalForm } from './PrepExternal';
+import { Preparation } from './Preparation';
 import { GuestConfirmation } from './GuestCollaboration';
 import { TaskHandoff } from './TaskHandoff';
 import { Materials, PublicEvent, Registration } from './Attendees';
@@ -194,6 +195,7 @@ function Workbench({ route, auth, guestLink, workspace }) {
   const [modal, setModal] = useState('');
   const [draft, setDraft] = useState(null);
   const [agentRun, setAgentRun] = useState(null);
+  const [agentModel, setAgentModel] = useState('auto');
   const [agentDockOpen, setAgentDockOpen] = useState(true);
   const [agentDrawerOpen, setAgentDrawerOpen] = useState(false);
   const directoryId = useId();
@@ -226,7 +228,8 @@ function Workbench({ route, auth, guestLink, workspace }) {
   if (shared) {
     event = { ...event, attendees: shared.people, formOpen: shared.event.formOpen };
     const received = new Set((shared.guestRequests ?? []).filter(item => item.taskId && item.filename).map(item => item.taskId));
-    if (received.size) event.tasks = event.tasks.map(task => received.has(String(task.id)) ? { ...task, done: true } : task);
+    if (received.size) event.tasks = event.tasks.map(task =>
+      received.has(String(task.id)) && !task.reopenedAfterUpload ? { ...task, done: true } : task);
     if (shared.operations) {
       const actual = { ...localEvent.actual, ...shared.operations.actual };
       const replies = new Map(shared.operations.replies.map(reply => [reply.id, reply]));
@@ -623,10 +626,12 @@ function Workbench({ route, auth, guestLink, workspace }) {
   async function executeAgentChoice(question, number) {
     const source = agentRun?.eventId === event.id ? agentRun : null;
     const confirmation = source?.confirmation;
-    if (!confirmation) {
+    if (!confirmation || !source.proposal) {
       const released = source?.reviewChangeId && event.history.some(change => change.id === source.reviewChangeId);
-      const message = released ? '这张变更单已发布，请查看发布记录。' :
-        (account ? '请先在当前对话预览变更方案，再回复要执行的编号。' : '请登录活动负责人账号后确认发布。');
+      let message = '请登录活动负责人账号后确认发布。';
+      if (account) message = '请先在当前对话预览变更方案，再回复要执行的编号。';
+      if (released) message = '这张变更单已发布，请查看发布记录。';
+      else if (source?.reviewChangeId && source.reviewChangeId === event.change?.id) message = '方案已转入变更单，请在那里核对并发布。';
       if (source) setAgentRun({ ...source, execution: { question, message } });
       else setAgentRun({ eventId: event.id, question, answer: message });
       return;
@@ -682,7 +687,7 @@ function Workbench({ route, auth, guestLink, workspace }) {
       const previous = conversation.get(event.id) ?? [];
       const suggested = incident ? { proposal: { kind: 'rescue', eventId: event.id, analysis: { incident } } } :
         localProposal ? { proposal: localProposal } :
-          await askModel(question, event, request.signal, account?.id, previous.slice(-4).map(entry => entry.context));
+          await askModel(question, event, request.signal, account?.id, previous.slice(-4).map(entry => entry.context), agentModel);
       if (request.signal.aborted) return;
       const result = await previewExecution(suggested);
       if (!request.signal.aborted) {
@@ -729,21 +734,31 @@ function Workbench({ route, auth, guestLink, workspace }) {
     }
     const before = proposal.before;
     const session = event.agenda.find(item => item.id === before.id);
+    function retireProposal(next) {
+      const run = { ...agentRun, ...next, proposal: null, confirmation: null };
+      saveConversation(event.id, turns => {
+        const last = turns.at(-1);
+        if (last === agentRun || (last?.confirmation && last.confirmation.id === agentRun.confirmation?.id)) {
+          return [...turns.slice(0, -1), run];
+        }
+        return turns;
+      });
+      setAgentRun(run);
+    }
     if (proposal.eventId !== event.id || !session || session.start !== before.start || session.end !== before.end || session.room !== before.room) {
-      setAgentRun(current => ({ ...current, proposal: null, error: '议程已更新，请重新向 Agent 提出调整。' }));
+      retireProposal({ error: '议程已更新，请重新向 Agent 提出调整。' });
       return;
     }
     const change = makeMoveChange(event, session, {
       room: proposal.room, start: proposal.start, closedRoom: proposal.closedRoom, earliest: proposal.earliest,
     }, 'Agent 提出的调整建议', candidate);
-    const run = { ...agentRun, proposal: null, reviewChangeId: change.id };
-    saveConversation(event.id, turns => turns.at(-1) === agentRun ? [...turns.slice(0, -1), run] : turns);
-    setAgentRun(run);
+    retireProposal({ reviewChangeId: change.id });
     openChange(change);
   }
 
   const sourceIssueId = path === 'sources' && routeEventId === 'issue' ? role : undefined;
-  const props = { event, readOnly, mobile, update, navigate, notify, ask, openChange, publish, prepareRescue, releaseRescue,
+  const props = { event, readOnly, mobile, ownerId: account?.id, update, navigate, notify, ask, openChange, publish, prepareRescue, releaseRescue,
+    openAccount: () => showModal('account'),
     refreshMoveChange, copy, activateChange, openImport, openDraft: () => showModal('draft'), importFiles, sourceIssueId, registration,
     showDesignMaterials: path === 'materials' && routeEventId === 'design',
     focusTaskId: path === 'prep' && routeEventId === 'task' ? role : '',
@@ -788,6 +803,7 @@ function Workbench({ route, auth, guestLink, workspace }) {
             <ActivitySections key={event.id} {...props} />
           </main>
           <AgentWorkspace key={event.id} id={agentId} event={event} account={account} docked={dockAgent} open={agentOpen} close={closeAgent}
+            modelChoice={agentModel} onModelChoice={setAgentModel} settingsOpen={modal === 'settings'}
             history={(conversation.get(event.id) ?? []).filter(turn =>
               turn !== agentRun && (!turn.confirmation || turn.confirmation.id !== agentRun?.confirmation?.id))}
             clearHistory={() => { agentRequest.current?.abort(); saveConversation(event.id, () => []); setAgentRun(null); }}
@@ -803,7 +819,7 @@ function Workbench({ route, auth, guestLink, workspace }) {
         ? { ...item, change, draftChanges: [item.change, ...(item.draftChanges ?? [])].filter(row => row && row.id !== change.id) } : item));
       select(id, target);
     }} />}
-    {modal === 'account' && <AccountDialog {...auth} signOut={async () => { await workspace.flush(); await auth.signOut(); }}
+    {modal === 'account' && <AccountDialog {...auth} workspace={workspace}
       openTeam={() => setModal('team')} close={() => setModal('')} />}
     {modal === 'settings' && <ModelSettings ownerId={account?.id} close={() => setModal('')} />}
     {modal === 'draft' && account && <WorkspaceDraftDialog ownerId={account.id} event={event} update={update} notify={notify} close={() => setModal('')} />}

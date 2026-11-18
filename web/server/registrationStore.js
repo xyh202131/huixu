@@ -580,15 +580,19 @@ export function createRegistrationStore(root, override, now = Date.now) {
       if (row.revision !== input.revision) throw new RegistrationError(409, '现场状态已更新，请核对后重试。');
       row = mergeOperations(row, input.operations);
       const { sessionId, action, time } = input;
-      if (!JSON.parse(row.snapshot).agenda.some(session => session.id === sessionId) || !isClock(time) || !['start', 'end'].includes(action)) {
+      const { agenda } = JSON.parse(row.snapshot);
+      const session = agenda.find(item => item.id === sessionId);
+      if (!session || !isClock(time) || !['start', 'end'].includes(action)) {
         throw new RegistrationError(400, '环节或现场时间无效。');
       }
       const operations = operationsFor(eventId);
       const current = operations.actual[sessionId];
       if (action === 'start') {
         if (current?.started) return state(row);
-        if (Object.values(operations.actual).some(item => item.started && !item.ended)) {
-          throw new RegistrationError(409, '请先结束正在进行的环节，再记录下一场开始。');
+        const occupied = agenda.some(item => item.room === session.room &&
+          operations.actual[item.id]?.started && !operations.actual[item.id]?.ended);
+        if (occupied) {
+          throw new RegistrationError(409, '同一会场还有进行中的环节，请先记录结束。');
         }
         operations.actual[sessionId] = { started: time };
       } else {

@@ -32,7 +32,7 @@ export function TopicPlanForm({ events, initialTopic, create, ownerId }) {
     setPending(true);
     setError('');
     try {
-      const connection = await browserModel('chat', ownerId);
+      const connection = await browserModel('chat', ownerId, controller.signal);
       const response = await fetch(ownerId ? '/api/topic-plan' : '/api/browser-topic-plan', {
         method: 'POST', headers: { 'Content-Type': 'application/json', ...(ownerId && { 'X-Huixu-Account': ownerId }) },
         body: JSON.stringify({ topic, type, audience: input.audience, slots: reference?.slots, lessons: reference?.lessons, connection: connection ?? undefined }), signal: controller.signal,

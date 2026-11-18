@@ -78,16 +78,16 @@ test('首次建号、会话保护和退出撤销', async t => {
   assert.ok(limited, '连续失败的登录请求应触发限流');
 });
 
-test('创空间代理下的首次建号需要初始化码，登录使用 HTTPS 会话', async t => {
+test('创空间只采用部署预设的首位负责人，重启保留原账号及 HTTPS 会话', async t => {
   const directory = await mkdtemp(join(tmpdir(), 'huixu-studio-auth-'));
   const database = join(directory, 'auth.sqlite');
   const publicOrigin = 'https://example.ms.show';
-  const setupCode = 'fixture-setup-abcdefghijklmnopqrstuv';
-  const auth = createWorkbenchAuth(process.cwd(), database, { publicOrigin, setupCode });
+  const signupCode = 'fixture-invite-abcdefghijklmnopqrstuv';
+  let auth = createWorkbenchAuth(process.cwd(), database, { publicOrigin, signupCode });
   const server = createServer((request, response) => {
     if (!allowHostedRequest(request, publicOrigin)) return sendJson(response, 403, {});
-    if (request.url === '/setup') {
-      request.url = '/';
+    if (request.url === '/session' || request.url === '/session/register') {
+      request.url = request.url.slice('/session'.length) || '/';
       return auth.session(request, response);
     }
     return auth.handle(request, response);
@@ -103,19 +103,38 @@ test('创空间代理下的首次建号需要初始化码，登录使用 HTTPS �
   function post(path, input, origin = publicOrigin) {
     return fetch(url + path, { method: 'POST', headers: { Origin: origin, 'Content-Type': 'application/json' }, body: JSON.stringify(input) });
   }
-  const credentials = { email: 'owner@example.test', password: 'Fixture-only-studio-123!', name: '创空间负责人' };
-  assert.equal((await post('/setup', { ...credentials, setupCode }, 'https://other.example.test')).status, 403);
-  assert.equal((await post('/setup', credentials)).status, 403);
-  assert.equal((await (await fetch(url + '/setup')).json()).setupCodeRequired, true);
-  assert.equal((await post('/setup', { ...credentials, setupCode })).status, 201);
+  function loadSession(cookie) {
+    return fetch(url + '/session', { headers: cookie ? { Cookie: cookie } : {} }).then(response => response.json());
+  }
+  const credentials = { email: 'owner@example.test', password: 'Fixture-only-studio-123!' };
+  const visitor = { ...credentials, email: 'visitor@example.test', name: '演练访客' };
+  assert.deepEqual(await loadSession(), { user: null, setupRequired: false, ownerSetupPending: true });
+  assert.equal((await post('/session', visitor, 'https://other.example.test')).status, 403);
+  assert.equal((await post('/session', visitor)).status, 403);
+  assert.equal((await post('/session/register', { ...visitor, signupCode })).status, 403);
+
+  auth.close();
+  auth = createWorkbenchAuth(process.cwd(), database, { publicOrigin, signupCode,
+    ownerEmail: ' OWNER@example.test ', ownerPassword: credentials.password });
+  assert.deepEqual(await loadSession(), { user: null, setupRequired: false, signupEnabled: true });
+  assert.equal((await post('/session', visitor)).status, 403);
   const signIn = await post('/sign-in/email', credentials);
   assert.equal(signIn.status, 200);
   const cookies = signIn.headers.getSetCookie();
   assert.ok(cookies.some(cookie => /; Secure(?:;|$)/i.test(cookie) && cookie.includes('HttpOnly') &&
     /; SameSite=None(?:;|$)/i.test(cookie) && /; Partitioned(?:;|$)/i.test(cookie)));
   const cookie = cookies.map(value => value.split(';', 1)[0]).join('; ');
-  const signedIn = await fetch(url + '/setup', { headers: { Cookie: cookie } });
-  assert.equal((await signedIn.json()).user.name, credentials.name);
+  const { user } = await loadSession(cookie);
+  assert.equal(user.email, credentials.email);
+  assert.equal(user.legacyWorkspace, true);
+  assert.equal((await post('/session/register', { ...visitor, signupCode })).status, 201);
+
+  auth.close();
+  auth = createWorkbenchAuth(process.cwd(), database, { publicOrigin, ownerEmail: 'other@example.test',
+    ownerPassword: 'Fixture-only-different-owner-123!' });
+  assert.deepEqual((await loadSession(cookie)).user, user);
+  assert.equal((await post('/sign-in/email', credentials)).status, 200);
+  assert.equal((await post('/sign-in/email', { email: 'other@example.test', password: 'Fixture-only-different-owner-123!' })).status, 401);
 });
 
 test('创空间仅允许同源写请求转换受保护接口的方法', () => {

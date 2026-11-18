@@ -233,7 +233,7 @@ async function runModel(config, question, event, memory, signal, history) {
   return { status: 502, error: '模型没有返回可显示的结果，请重试。' };
 }
 
-export function createAgentHandler(getModelConfig, memory) {
+export function createAgentHandler(getModelConfig, memory, { platformModel, getPersonalModel = getModelConfig } = {}) {
   let active = 0;
   return async (request, response, user) => {
     if (request.method !== 'POST') return send(response, 405, { error: '此接口仅接受 POST。' });
@@ -253,9 +253,15 @@ export function createAgentHandler(getModelConfig, memory) {
       try { input = JSON.parse(body.toString('utf8')); } catch {
         return send(response, 400, { error: '请求内容无效。' });
       }
-      const { config, error } = input?.connection === undefined ? { config: getModelConfig() } : browserConnectionFrom(input.connection, user);
+      const choice = input?.modelChoice ?? 'auto';
+      if (!['auto', 'personal', 'platform'].includes(choice)) return send(response, 400, { error: '请选择有效的对话模型。' });
+      const { config, error } = choice === 'platform' ? { config: platformModel }
+        : input?.connection !== undefined ? browserConnectionFrom(input.connection, user)
+          : { config: choice === 'personal' ? getPersonalModel() : getModelConfig() };
       if (error) return send(response, 400, { error });
-      if (!config) return send(response, 503, { code: 'MODEL_NOT_CONFIGURED', error: '尚未配置模型。可在工作台右上角的模型设置中添加。' });
+      if (!config) return send(response, 503, { code: 'MODEL_NOT_CONFIGURED', error: choice === 'platform'
+        ? '平台 MiniMax 暂未配置。可切换到已配置的个人模型。'
+        : '尚未配置可用的模型。可从输入框切换，或打开模型设置添加。' });
       const question = limit(input?.question, 2000);
       const event = readSnapshot(input?.event);
       if (!question || !event) return send(response, 400, { error: '请提供问题和当前活动摘要。' });

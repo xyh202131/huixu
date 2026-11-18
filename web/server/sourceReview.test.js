@@ -1,10 +1,13 @@
 import assert from 'node:assert/strict';
 import { mkdtemp, rm } from 'node:fs/promises';
+import { createServer } from 'node:http';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { test } from 'node:test';
 import { DatabaseSync } from 'node:sqlite';
 import { applyReviewFields, conflictEvidenceKey, currentReviewChoice, planFromReview, rebasePlanDraft, reviewChoices } from '../src/organizationSchema.js';
+import { readBody, sendJson } from './localApi.js';
+import { createOrganizationHandler } from './organizationApi.js';
 import { organizeSources } from './organizeSources.js';
 import { createProjectMemory } from './projectMemory.js';
 
@@ -15,6 +18,76 @@ async function fixture(t) {
   t.after(async () => { memory.close(); await rm(directory, { recursive: true, force: true }); });
   return { memory, file };
 }
+
+async function listen(t, handler) {
+  const server = createServer(handler);
+  await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
+  t.after(() => new Promise(resolve => server.close(resolve)));
+  return 'http://127.0.0.1:' + server.address().port;
+}
+
+test('长资料续跑保留已有证据，处理完余下资料后只重试失败片段', async t => {
+  const { memory } = await fixture(t);
+  const paragraphs = Array.from({ length: 281 }, (_, index) => {
+    if (index === 14) return '演练圆桌开始时间为14:00。';
+    if (index === 280) return '演练圆桌开始时间为14:30。';
+    return '演练资料片段 ' + (index + 1);
+  });
+  await memory.add('forum', '虚构活动资料.txt', Buffer.from(paragraphs.join('\n\n')), true);
+  const scope = memory.organizationScope('forum');
+  assert.equal(scope.total, 281);
+  // 跨版本升级时，旧结果缺少片段位置，但页面仍应提供继续整理。
+  memory.saveOrganization('forum', scope.revision, { revision: scope.revision, facts: [], covered: 280, local: 0, failed: 0, total: 281 });
+
+  const attempted = [];
+  let rejectFirstBatch = true;
+  const provider = await listen(t, async (request, response) => {
+    const body = JSON.parse(await readBody(request, 64 * 1024));
+    const chunks = JSON.parse(body.messages.at(-1).content);
+    attempted.push(chunks.map(({ chunkId }) => chunkId));
+    if (rejectFirstBatch && chunks[0].text === paragraphs[0]) return sendJson(response, 503, {});
+    const facts = chunks.flatMap(chunk => {
+      const time = chunk.text.match(/14:(00|30)/)?.[0];
+      return time ? [{ section: 'agenda', entity: '演练圆桌', field: 'start', value: time, chunkId: chunk.chunkId }] : [];
+    });
+    return sendJson(response, 200, { choices: [{ message: { tool_calls: [{ id: 'facts', type: 'function',
+      function: { name: 'record_import_facts', arguments: JSON.stringify({ facts }) } }] } }] });
+  });
+  const config = { protocol: 'openai', model: 'fixture', url: provider };
+  let handle = createOrganizationHandler(() => config, memory);
+  const origin = await listen(t, (request, response) => handle(request, response));
+  async function request(method = 'GET') {
+    const response = await fetch(origin + '/?event=forum', { method });
+    assert.equal(response.status, 200);
+    return response.json();
+  }
+  assert.equal((await request()).status, 'partial');
+  const first = await request('POST');
+  assert.equal(first.status, 'partial');
+  assert.equal(first.review.covered, 266);
+  assert.equal(first.review.failed, 14);
+  assert.equal(first.review.facts[0].options[0].value, '14:00');
+  const failedIds = [...attempted[0]];
+  assert.equal(attempted.flat().length, 280);
+
+  // 模拟重启，并从已经保存的片段位置继续。
+  memory.close();
+  handle = createOrganizationHandler(() => config, memory);
+  const more = await request('POST');
+  assert.equal(more.status, 'partial');
+  assert.equal(more.review.covered, 267);
+  assert.deepEqual(more.review.facts[0].options.map(item => item.value), ['14:00', '14:30']);
+  assert.equal(attempted.at(-1).length, 1);
+  rejectFirstBatch = false;
+  const complete = await request('POST');
+  assert.equal(complete.status, 'ready');
+  assert.equal(complete.review.covered, 281);
+  assert.equal(complete.review.failed, 0);
+  assert.deepEqual(attempted.at(-1), failedIds);
+  assert.deepEqual(complete.review.facts, more.review.facts);
+  assert.equal((await request('POST')).status, 'ready');
+  assert.equal(attempted.flat().length, 281 + failedIds.length);
+});
 
 test('历史原件可替换为新版本，迁移后保留原文引用与核对记录，普通导入继续去重', async t => {
   const { memory, file } = await fixture(t);

@@ -4,9 +4,8 @@ import { reservesSeat } from './registrationRules';
 import { browserModel } from './browserModels';
 import { workItems } from './workItems';
 
-export async function askModel(question, event, signal, ownerId, history = []) {
-  const connection = await browserModel('chat', ownerId);
-  if (!ownerId && !connection) return { code: 'MODEL_NOT_CONFIGURED', error: '请先在右上角模型设置中填写并保存 API Key，即可开始使用 Agent。' };
+export async function askModel(question, event, signal, ownerId, history = [], modelChoice = 'auto') {
+  const connection = modelChoice === 'platform' ? null : await browserModel('chat', ownerId, signal);
   const registrations = new Map();
   for (const person of event.attendees) {
     const totals = registrations.get(person.sessionId) ?? { confirmed: 0, waitlisted: 0, pending: 0 };
@@ -50,7 +49,7 @@ export async function askModel(question, event, signal, ownerId, history = []) {
   };
   const response = await fetch(ownerId ? '/api/agent' : '/api/browser-agent', {
     method: 'POST', signal, headers: { 'Content-Type': 'application/json', ...(ownerId && { 'X-Huixu-Account': ownerId }) },
-    body: JSON.stringify({ question, event: snapshot, history, connection: connection ?? undefined }),
+    body: JSON.stringify({ question, event: snapshot, history, modelChoice, connection: connection ?? undefined }),
   });
   if (response.status === 401) window.dispatchEvent(new Event(sessionExpired));
   if (!response.headers.get('content-type')?.includes('application/json')) throw new Error('会序模型接口不可用，请通过工作台开发服务启动。');

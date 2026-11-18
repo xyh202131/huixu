@@ -25,10 +25,9 @@ export function importSource(eventId, file, agentAccess, replacementId, ownerId)
 
 export async function organizationRequest(eventId, method = 'GET', signal, ownerId) {
   if (method === 'POST' && !ownerId) throw new Error('请先登录负责人账号再整理资料。');
-  const connection = method === 'POST' ? await browserModel('organization', ownerId) : null;
+  if (method === 'POST') await browserModel('organization', ownerId, signal);
   const response = await fetch('/api/project-organization?' + new URLSearchParams({ event: eventId }), {
-    method, signal, headers: { ...(ownerId && { 'X-Huixu-Account': ownerId }), ...(connection && { 'Content-Type': 'application/json' }) },
-    ...(connection && { body: JSON.stringify({ connection }) }),
+    method, signal, headers: ownerId ? { 'X-Huixu-Account': ownerId } : {},
   });
   if (response.status === 401) window.dispatchEvent(new Event(sessionExpired));
   if (!response.headers.get('content-type')?.includes('application/json')) throw new Error('本机智能整理接口不可用。');

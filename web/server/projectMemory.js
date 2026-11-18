@@ -276,12 +276,15 @@ export function createProjectMemory(root, override) {
     };
   }
 
-  function organizationInput(eventId, scope) {
+  function organizationInput(eventId, scope, { after = 0, retryIds = [] } = {}) {
+    const limit = 280;
+    const ids = retryIds.slice(0, limit);
+    const selection = ids.length ? `c.id IN (${ids.map(() => '?').join(',')})` : 'c.id > ?';
     const chunks = getDb().prepare(`SELECT c.id AS chunkId, s.name, s.revision, c.location, c.body AS text, COALESCE(e.version, 0) AS textRevision
       FROM memory_sources s JOIN memory_chunks c ON c.source_id = s.id
       LEFT JOIN memory_chunk_edits e ON e.chunk_id = c.id
-      WHERE s.event_id = ? AND s.agent_access = 1 AND ${currentSource} AND ${usableSource}
-      ORDER BY c.id LIMIT 2500`).all(eventId);
+      WHERE s.event_id = ? AND s.agent_access = 1 AND ${currentSource} AND ${usableSource} AND ${selection}
+      ORDER BY c.id LIMIT ?`).all(eventId, ...(ids.length ? ids : [after]), limit);
     return { ...scope, chunks };
   }
 

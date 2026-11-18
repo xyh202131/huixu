@@ -300,6 +300,8 @@ tr[draggable="true"] { cursor: grab; }
 .running + .running { border-top: 1px solid var(--border); }
 .running span:not(.icon-tile), .running small { display: block; color: var(--muted); font-size: 13px; }
 .running strong { display: block; margin: 3px 0; }
+.live-room + .live-room { border-top: 1px solid var(--border); margin-top: 10px; padding-top: 10px; }
+.live-room h3 { font-size: 15px; }
 .board {
   display: grid; gap: 15px; padding: 24px; border: 1px solid var(--border);
   background: var(--surface-muted); color: var(--ink); border-radius: var(--radius); line-height: 1.6;

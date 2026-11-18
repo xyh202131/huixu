@@ -1,9 +1,11 @@
 import { useEffect, useRef, useState } from 'react';
 import { ArrowUp, FileText, PanelRightClose, Sparkles } from 'lucide-react';
+import { loadAgentModels } from './browserModels';
 import { Badge, IconButton } from './components';
 import { Dialog, Notice } from './interactions';
 import { checkinPoint, roomLabel, timeRange } from './scheduling';
 import { RescueBlockers } from './RescueChange';
+import { Select } from './Select';
 
 function AgentResponse({ run, event, ask, stop, askLocal, openSettings, reviewProposal, openSource, openReviewedChange, selectCandidate }) {
   const released = run.reviewChangeId && event.history.find(change => change.id === run.reviewChangeId);
@@ -137,11 +139,32 @@ function MoveAnalysis({ proposal, event, selected, reviewProposal, selectCandida
   </section>;
 }
 
-export function AgentWorkspace({ id, event, account, docked, open, close, run, history, clearHistory, selectCandidate, ask, stop, askLocal, openSettings, reviewProposal, openSource, openReviewedChange }) {
+export function AgentWorkspace({ id, event, account, docked, open, close, modelChoice, onModelChoice, settingsOpen,
+  run, history, clearHistory, selectCandidate, ask, stop, askLocal, openSettings, reviewProposal, openSource, openReviewedChange }) {
   const [input, setInput] = useState('');
+  const [models, setModels] = useState(null);
   const transcript = useRef(null);
   const question = run?.question;
   const busy = Boolean(run?.pending || run?.execution?.pending);
+  const ownerId = account?.id;
+  const modelOptions = [{ value: 'auto', label: '自动', detail: models?.automatic,
+    triggerLabel: models?.automatic ? '自动 · ' + models.automatic : '自动选择模型' }];
+  if (models?.platform) modelOptions.push({ value: 'platform', label: '平台 MiniMax', detail: models.platform });
+  if (models?.personal) modelOptions.push({ value: 'personal', label: '我的模型', detail: models.personal });
+
+  useEffect(() => {
+    if (!open || settingsOpen) return;
+    const request = new AbortController();
+    void loadAgentModels(ownerId, request.signal).then(options => {
+      if (!request.signal.aborted) setModels(options);
+    });
+    return () => request.abort();
+  }, [open, settingsOpen, ownerId]);
+
+  useEffect(() => {
+    if (!models || modelChoice === 'auto' || models[modelChoice]) return;
+    onModelChoice('auto');
+  }, [models, modelChoice, onModelChoice]);
 
   useEffect(() => {
     if (transcript.current) transcript.current.scrollTop = 0;
@@ -161,7 +184,7 @@ export function AgentWorkspace({ id, event, account, docked, open, close, run, h
       {!!history.length && <details><summary>此前对话（{history.length}）</summary>{history.map((item, index) =>
         <div key={index}><strong>{item.question}</strong><p>{item.answer}</p></div>)}</details>}
       {run ? <AgentResponse {...{ run, event, ask, stop, askLocal, openSettings, reviewProposal, openSource, openReviewedChange, selectCandidate }} /> :
-        <p className="muted">{account ? '查询活动进展、查找资料，或准备一份议程调整草稿。' : '配置模型后即可询问当前活动、起草方案或分析议程调整。访客草稿保留到本次页面关闭。'}</p>}
+        <p className="muted">{account ? '查询活动进展、查找资料，或准备一份议程调整草稿。' : '询问示例活动、起草方案或分析议程调整。访客草稿保留到本次页面关闭。'}</p>}
       {!busy && <div className="agent-prompts">
         {run && <button type="button" className="button small" onClick={clearHistory}>清空本场对话</button>}
         <button type="button" className="button small" onClick={() => ask('当前活动的筹备进展怎么样？')}>查看筹备进展</button>
@@ -176,8 +199,11 @@ export function AgentWorkspace({ id, event, account, docked, open, close, run, h
           event.preventDefault();
           event.currentTarget.form.requestSubmit();
         }} />
-      <IconButton type="submit" className="button primary" label="提交给 Agent" icon={ArrowUp}
-        busy={busy} disabled={busy || !input.trim()} />
+      <div className="agent-compose-actions">
+        <Select compact label="切换对话模型" options={modelOptions} value={modelChoice} onChange={onModelChoice} />
+        <IconButton type="submit" className="button primary" label="提交给 Agent" icon={ArrowUp}
+          busy={busy} disabled={busy || !input.trim()} />
+      </div>
     </form>
   </>;
 

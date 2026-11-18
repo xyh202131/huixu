@@ -23,7 +23,7 @@ function respondError(response, error) {
   return sendJson(response, 500, { error: '报名服务暂时不可用，请稍后重试。' });
 }
 
-export function registrationOwnerApi(store, mail) {
+export function registrationOwnerApi(store, mail, canUseMail = () => true) {
   return async (request, response, user) => {
     try {
       const owner = user.id;
@@ -77,8 +77,10 @@ export function registrationOwnerApi(store, mail) {
       } else if (action === 'links' && id && method === 'DELETE' && !operation) {
         result = store.revoke(owner, eventId, id);
       } else if (action === 'mail' && !id && method === 'GET') {
-        result = mail.records(owner, eventId);
+        const records = mail.records(owner, eventId);
+        result = canUseMail(user) ? records : { ...records, configured: false, reason: '部署端邮件渠道仅供首位负责人使用。' };
       } else if (action === 'mail' && id && method === 'POST') {
+        if (!canUseMail(user)) throw new RegistrationError(403, '部署端邮件渠道仅供首位负责人使用。');
         if (operation === 'preview') result = mail.preview(owner, eventId, id);
         else if (operation === 'send' || operation === 'retry') result = await mail.send(owner, eventId, id, operation === 'retry');
         else if (operation === 'refresh') result = await mail.refresh(owner, eventId, id);

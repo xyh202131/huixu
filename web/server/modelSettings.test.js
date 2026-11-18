@@ -1,14 +1,16 @@
 import assert from 'node:assert/strict';
-import { mkdtemp, rmdir, unlink } from 'node:fs/promises';
+import { randomBytes } from 'node:crypto';
+import { mkdtemp, readFile, rmdir, unlink } from 'node:fs/promises';
 import { createServer } from 'node:http';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { DatabaseSync } from 'node:sqlite';
 import { test } from 'node:test';
 import { modelPresets } from '../src/modelPresets.js';
 import { createAgentHandler } from './agent.js';
 import { createWorkbenchAuth } from './auth.js';
 import { readBody, sendJson } from './localApi.js';
-import { modelEndpoint, readModelConfig } from './modelProvider.js';
+import { createPlatformModel, modelEndpoint, readModelConfig } from './modelProvider.js';
 import { createModelSettings } from './modelSettings.js';
 import { createOrganizationHandler } from './organizationApi.js';
 
@@ -36,6 +38,26 @@ test('创空间允许 MiniMax 的两个服务地址，服务端 Messages 使用�
     if (previous === undefined) delete process.env.HUIXU_HOSTED;
     else process.env.HUIXU_HOSTED = previous;
   }
+});
+
+test('平台 MiniMax 仅开放受信服务，并限制并发和共用额度', async () => {
+  const env = { HUIXU_LLM_PROTOCOL: 'anthropic', HUIXU_LLM_BASE_URL: 'https://api.minimaxi.com/anthropic',
+    HUIXU_LLM_MODEL: 'MiniMax-M3.1-Flash', HUIXU_LLM_API_KEY: 'fixture-key' };
+  assert.equal(createPlatformModel({ ...env, HUIXU_LLM_API_KEY: '' }), null);
+  assert.equal(createPlatformModel({ ...env, HUIXU_LLM_BASE_URL: 'https://example.test' }), null);
+  assert.equal(createPlatformModel({ ...env, HUIXU_LLM_MODEL: 'private-model' }), null);
+  let time = 0;
+  const { withQuota } = createPlatformModel(env, () => time);
+  const { promise, resolve } = Promise.withResolvers();
+  const pending = Array.from({ length: 4 }, () => withQuota(() => promise));
+  assert.match((await withQuota(() => assert.fail('超过并发限制'))).error, /正在处理/);
+  resolve();
+  await Promise.all(pending);
+  await assert.rejects(withQuota(() => { throw new Error('模拟上游失败'); }), /模拟上游失败/);
+  for (let index = 5; index < 60; index++) assert.equal(await withQuota(() => 'ok'), 'ok');
+  assert.match((await withQuota(() => assert.fail('超过额度限制'))).error, /频率上限/);
+  time = 60000;
+  assert.equal(await withQuota(() => 'ok'), 'ok');
 });
 
 test('模型设置按用途启用、验收和恢复共享配置', async t => {
@@ -69,7 +91,8 @@ test('模型设置按用途启用、验收和恢复共享配置', async t => {
 
   const env = { HUIXU_MODEL_DB: modelsPath, HUIXU_LLM_BASE_URL: provider + '/v1', HUIXU_LLM_MODEL: 'fallback-fixture',
     HUIXU_LLM_API_KEY: 'fixture-server-fallback-key' };
-  const models = createModelSettings(process.cwd(), env);
+  const storageKey = randomBytes(32);
+  const models = createModelSettings(process.cwd(), env, storageKey);
   t.after(async () => {
     models.close();
     auth.close();
@@ -151,6 +174,9 @@ test('模型设置按用途启用、验收和恢复共享配置', async t => {
 
   const { active } = await (await request(settings, custom)).json();
   assert.ok(!JSON.stringify(active).includes(apiKey));
+  const importResult = await (await request(settings, { ...custom, model: 'old-browser', importLegacy: true })).json();
+  assert.equal(importResult.active.revision, active.revision);
+  assert.equal(importResult.active.model, custom.model);
   const keepKey = { ...custom, apiKey: '', keyRevision: active.revision };
   assert.equal((await request(settings, { ...keepKey, baseUrl: provider + '/other/v1' })).status, 400);
   const updated = await request(settings, { ...keepKey, model: 'fixture-next' });
@@ -193,7 +219,7 @@ test('模型设置按用途启用、验收和恢复共享配置', async t => {
   assert.equal((await (await request('/api/agent', agentInput)).json()).model, 'fixture-next');
   assert.equal(received.at(-1).key, apiKey);
 
-  const reopened = createModelSettings(process.cwd(), env);
+  const reopened = createModelSettings(process.cwd(), env, storageKey);
   try {
     assert.equal(reopened.getConfig().model, 'fixture-next');
     assert.equal(reopened.getOrganizationConfig().model, 'extraction-fixture');
@@ -209,5 +235,39 @@ test('模型设置按用途启用、验收和恢复共享配置', async t => {
   assert.deepEqual(await (await request(organization, undefined, { method: 'DELETE' })).json(),
     { source: 'shared', active: { model: 'fixture-next', protocol: 'anthropic' } });
   assert.equal((await (await request(settings, undefined, { method: 'DELETE' })).json()).source, 'environment');
+  assert.equal((await (await request(settings, { ...custom, importLegacy: true })).json()).source, 'environment');
+  assert.equal((await (await request(organization, { ...extraction, importLegacy: true })).json()).source, 'shared');
   assert.equal((await (await request('/api/agent', agentInput)).json()).model, 'fallback-fixture');
+});
+
+test('旧数据库中的模型 Key 转成密文，且单独的账号或用途无法解密该记录', async t => {
+  const directory = await mkdtemp(join(tmpdir(), 'huixu-model-migration-'));
+  const database = join(directory, 'models.sqlite');
+  const env = { HUIXU_MODEL_DB: database };
+  t.after(async () => { await unlink(database); await rmdir(directory); });
+  const legacy = { provider: 'custom', protocol: 'openai', baseUrl: 'https://example.test/v1', model: 'legacy-fixture',
+    keyHeader: 'bearer', key: 'fixture-before-encryption-2026', revision: 'original-revision' };
+  const seed = new DatabaseSync(database);
+  seed.exec('CREATE TABLE model_settings (id INTEGER PRIMARY KEY, config TEXT NOT NULL)');
+  seed.prepare('INSERT INTO model_settings VALUES (1, ?)').run(JSON.stringify(legacy));
+  seed.close();
+
+  const storageKey = randomBytes(32);
+  const models = createModelSettings(process.cwd(), env, storageKey);
+  try {
+    assert.equal(models.getConfig().key, legacy.key);
+    assert.equal(models.getConfig().revision, legacy.revision);
+  } finally { models.close(); }
+  assert.ok(!(await readFile(database)).includes(Buffer.from(legacy.key)));
+
+  const otherAccount = createModelSettings(process.cwd(), env, randomBytes(32));
+  try { assert.throws(() => otherAccount.getConfig()); } finally { otherAccount.close(); }
+
+  const inspect = new DatabaseSync(database);
+  const { config } = inspect.prepare('SELECT config FROM model_settings WHERE id = 1').get();
+  assert.ok(JSON.parse(config).encryptedKey);
+  inspect.prepare('INSERT INTO organization_model_settings VALUES (1, ?)').run(config);
+  inspect.close();
+  const reopened = createModelSettings(process.cwd(), env, storageKey);
+  try { assert.throws(() => reopened.getOrganizationConfig()); } finally { reopened.close(); }
 });

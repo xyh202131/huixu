@@ -2,7 +2,7 @@ import { checkCandidate, isClock, roomLabel } from './scheduling.js';
 import { planDate, planNumber, topicEventDetails } from './topicPlan.js';
 
 const text = value => String(value ?? '').trim();
-const roomKey = value => text(value).replace(/^([A-Za-z0-9]+)\s*厅$/, '$1');
+export const roomKey = value => text(value).replace(/^([A-Za-z0-9]+)\s*厅$/, '$1');
 const equipmentList = value => text(value).split(/[、,，;；\n]+/).map(text).filter(Boolean);
 
 export function adoptionDiff(before, after, fields) {
@@ -26,10 +26,11 @@ export function adoptExecutionPlan(event, plan) {
       guest: text(row.host), expected: text(row.expected), equipment: equipmentList(row.equipment),
     };
   });
-  const rooms = (plan.venues ?? []).filter(row => text(row.name)).map(row => ({
-    id: roomKey(row.name), capacity: planNumber(row.capacity, 100000), ready: '',
-    equipment: equipmentList(row.equipment),
-  }));
+  const rooms = (plan.venues ?? []).filter(row => text(row.name)).map(row => {
+    const id = roomKey(row.name);
+    const existing = event.executionPlan?.rooms.find(room => room.id === id) ?? event.rooms.find(room => room.id === id);
+    return { id, capacity: planNumber(row.capacity, 100000), ready: existing?.ready ?? '', equipment: equipmentList(row.equipment) };
+  });
   const tasks = [...event.tasks];
   for (const row of plan.tasks ?? []) {
     if (!text(row.name)) continue;
@@ -41,6 +42,7 @@ export function adoptExecutionPlan(event, plan) {
     for (const [field, value] of Object.entries(source)) {
       if (!old || value !== old.adopted?.[field]) task[field] = value;
     }
+    if (old?.dueDate && source.offset !== old.adopted?.offset) delete task.dueDate;
     Object.assign(task, { sourceId: row.id, adopted: source });
     if (index < 0) tasks.push(task);
     else tasks[index] = task;

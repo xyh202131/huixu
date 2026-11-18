@@ -18,16 +18,12 @@ export function Live({ event, readOnly, mobile, prepareRescue, registration }) {
   const [recording, setRecording] = useState(false);
   const [postPerson, setPostPerson] = useState('');
   const sessions = event.agenda.toSorted((a, b) => a.start.localeCompare(b.start));
-  const { current, next } = liveAgenda(event, sessions);
+  const roomProgress = liveAgenda(event, sessions);
   const posts = mobile ? sessions.flatMap(session => sessionPeople(event, session)
     .filter(person => person.role === '分场引导').map(person => ({ session, person }))) : [];
   const post = posts.find(({ session, person }) => person.id === postPerson && !event.actual[session.id]?.ended);
   async function mark(session, action) {
     if (!registration.current || recording) return;
-    if (action === 'started' && current) {
-      setProgressWarning({ sessionId: session.id, message: '请先结束正在进行的环节，再记录下一场开始。' });
-      return;
-    }
     setProgressWarning(null);
     const stamp = new Date().toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit', hourCycle: 'h23' });
     setRecording(true);
@@ -86,10 +82,13 @@ export function Live({ event, readOnly, mobile, prepareRescue, registration }) {
       {postPerson && !post && <p className="muted">该人员本场岗位已全部结束。</p>}
     </Panel>}
     <div className="split"><Panel title="现场进度" action={<Badge tone="success">{event.version ? '议程 v' + event.version : '计划草稿'}</Badge>}>
-      <div className="running"><IconTile icon={ClipboardCheck} /><div><span>当前环节</span><strong>{current?.title ?? '暂无进行中的环节'}</strong>
-        {current && <small>{roomLabel(current.room)} · 实际开始 {event.actual[current.id].started}</small>}</div></div>
-      <div className="running"><IconTile icon={Monitor} tone="blue" /><div><span>下一环节</span><strong>{next?.title ?? '活动结束'}</strong>
-        {next && <small>{timeRange(next)} · {roomLabel(next.room)}</small>}</div></div>
+      {roomProgress.length ? roomProgress.map(({ room, current, next }) => <section className="live-room" key={room} aria-label={roomLabel(room) + '的现场进度'}>
+        <h3>{roomLabel(room)}</h3>
+        <div className="running"><IconTile icon={ClipboardCheck} /><div><span>当前环节</span><strong>{current?.title ?? '暂无进行中的环节'}</strong>
+          {current && <small>实际开始 {event.actual[current.id].started}</small>}</div></div>
+        <div className="running"><IconTile icon={Monitor} tone="blue" /><div><span>下一环节</span><strong>{next?.title ?? '暂无后续环节'}</strong>
+          {next && <small>{timeRange(next)}</small>}</div></div>
+      </section>) : <Empty>暂无已排程的环节。</Empty>}
     </Panel><Panel title="观众签到" action={<Badge tone="success">入场&nbsp;<MetricValue value={entranceCount} compact />&nbsp;人</Badge>}>
       {!readOnly && registration.pendingCheckins > 0 && <Notice tone="warning">
         {registration.migrationProblem || `有 ${registration.pendingCheckins} 条历史签到待同步。若原报名尚未迁移，请先在「报名与发布」导入旧名单。`}
@@ -110,7 +109,7 @@ export function Live({ event, readOnly, mobile, prepareRescue, registration }) {
         <Table headers={['计划时间', '环节', '地点与岗位', '实绩', ...(readOnly ? [] : ['操作'])]}>{runbookRows}</Table>
       </>}
     </Panel>
-    {board && <Dialog title="现场大屏预览" close={() => setBoard(false)}><LiveBoard event={event} current={current} next={next} /></Dialog>}
+    {board && <Dialog title="现场大屏预览" close={() => setBoard(false)}><LiveBoard event={event} rooms={roomProgress} /></Dialog>}
     {report && <Dialog title="上报现场问题" variant="drawer" close={() => setReport(false)}>
       <RescueIncidentForm event={event} onPrepare={async input => {
         await prepareRescue(input);
@@ -120,11 +119,14 @@ export function Live({ event, readOnly, mobile, prepareRescue, registration }) {
   </>;
 }
 
-function LiveBoard({ event, current, next }) {
+function LiveBoard({ event, rooms }) {
   const release = event.history[0];
   return <div className="board"><h3>{event.title}</h3>
-    <p>当前 · {current?.title ?? '待开始'}{current && ' · ' + roomLabel(current.room)}</p>
-    <p>下一场 · {next ? next.title + ' · ' + roomLabel(next.room) + ' · ' + next.start : '无'}</p>
+    {rooms.length ? rooms.map(({ room, current, next }) => <div className="live-room" key={room}>
+      <strong>{roomLabel(room)}</strong>
+      <p>当前 · {current?.title ?? '暂无进行中的环节'}</p>
+      <p>下一场 · {next ? next.title + ' · ' + next.start : '无'}</p>
+    </div>) : <p>暂无已排程的环节。</p>}
     {release?.kind === 'rescue' ? <div>
       <p>最新变更 · v{release.version}</p>
       <ul className="plain-list">{release.changes.map(({ before, after }) =>

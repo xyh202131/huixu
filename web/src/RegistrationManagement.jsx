@@ -19,6 +19,7 @@ export function RegistrationEditor({ event, person, registration, close, notify 
   const [dirty, setDirty] = useState(false);
   const [link, setLink] = useState(null);
   const [preview, setPreview] = useState(null);
+  const [sendResult, setSendResult] = useState(null);
   const noteLabel = useId();
   const linkField = useRef(null);
   const path = person?.id ? '/people/' + person.id : '/people';
@@ -65,6 +66,7 @@ export function RegistrationEditor({ event, person, registration, close, notify 
           })}>生成专属链接</button>
           <button className="button" disabled={busy || dirty || !person.email} onClick={() => run(async () => {
             setPreview(await registration.change('/mail/' + person.id + '/preview', 'POST'));
+            setSendResult(null);
             setView('mail');
           })}><Mail size={16} aria-hidden="true" />预览确认邮件</button>
         </div>
@@ -91,14 +93,17 @@ export function RegistrationEditor({ event, person, registration, close, notify 
         <dt>主题</dt><dd>{preview.subject}</dd><dt>活动版本</dt><dd>{preview.version ? 'v' + preview.version : '活动信息'}</dd>
       </dl>
       <pre className="document-preview">{preview.body}{'\n\n'}［附 {preview.origin} 的专属确认链接］</pre>
+      {sendResult && <Notice tone={sendResult.status === 'accepted' ? 'info' : 'warning'} announce>
+        {sendResult.status === 'accepted'
+          ? 'Resend 已受理。投递结果可在「材料与沟通 → 出席确认邮件」核对。'
+          : (sendResult.error || '提交结果待核对。') + ' 请在「材料与沟通 → 出席确认邮件」查看记录。'}
+      </Notice>}
       <div className="actions">
         <button className="button" disabled={busy} onClick={() => { setView('edit'); setProblem(''); }}>返回报名</button>
-        <button className="button primary" disabled={busy} onClick={() => run(async () => {
+        {!sendResult && <button className="button primary" disabled={busy} onClick={() => run(async () => {
           const result = await registration.change('/mail/' + preview.id + '/send', 'POST');
-          const record = result.records.find(item => item.id === preview.id);
-          notify(record ? resultLabels[record.status] : '请在邮件记录查看结果');
-          close();
-        })}>{busy ? '正在提交邮件…' : '确认发送邮件'}</button>
+          setSendResult(result.records.find(item => item.id === preview.id) ?? { status: 'unknown' });
+        })}>{busy ? '正在提交邮件…' : '确认发送邮件'}</button>}
       </div>
     </div>}
     {problem && <Notice tone="warning" announce>{problem}</Notice>}

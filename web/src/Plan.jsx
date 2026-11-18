@@ -13,7 +13,7 @@ import { changeReviewKey, describeChangeImpact } from './changeImpact';
 import { analyzeMove, checkinPoint, sameCandidate } from './scheduling';
 import { assessExecutionPlan } from './executionPlan';
 
-export function Sources({ event, readOnly, mobile, update, notify, navigate, importFiles, importRun, memoryEvidenceId, closeSource, sourceReturnLabel, openImport, organize, organizationRun, sourceIssueId }) {
+export function Sources({ event, readOnly, mobile, ownerId, update, notify, navigate, importFiles, importRun, memoryEvidenceId, closeSource, sourceReturnLabel, openImport, organize, organizationRun, sourceIssueId }) {
   const [selectedIssue, setSelectedIssue] = useState(sourceIssueId);
   const [editingSource, setEditingSource] = useState(null);
   useEffect(() => { if (sourceIssueId) setSelectedIssue(sourceIssueId); }, [sourceIssueId]);
@@ -62,7 +62,7 @@ export function Sources({ event, readOnly, mobile, update, notify, navigate, imp
     </div>}
     {!readOnly && <ProjectMemory eventId={event.id} mobile={mobile} importFiles={importFiles} importRun={importRun} evidenceId={memoryEvidenceId}
       onCloseEvidence={closeSource} returnLabel={sourceReturnLabel} onAccessChange={allowed => organize(event.id, allowed)}>
-      <ImportReview {...{ event, update, notify, navigate, organize, organizationRun, importRun }} />
+      <ImportReview {...{ event, ownerId, update, notify, navigate, organize, organizationRun, importRun }} />
     </ProjectMemory>}
     {event.files.length > 0 && <details className="activity-file-history">
       <summary>样例与旧资料登记（{event.files.length}）</summary>

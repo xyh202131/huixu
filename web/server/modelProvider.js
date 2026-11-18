@@ -1,8 +1,8 @@
 import { modelPresets } from '../src/modelPresets.js';
 
-const presetOrigins = new Set(Object.values(modelPresets).map(preset => new URL(preset.baseUrl).origin));
 // 兼容已有 MiniMax 中国区配置使用的域名。
-presetOrigins.add('https://api.minimaxi.com');
+const minimaxOrigins = new Set([new URL(modelPresets.minimax.baseUrl).origin, 'https://api.minimaxi.com', 'https://api.minimax.io']);
+const presetOrigins = new Set([...Object.values(modelPresets).map(preset => new URL(preset.baseUrl).origin), ...minimaxOrigins]);
 const inferenceOrigin = 'https://api-inference.modelscope.cn';
 
 function isHostedModelAllowed(url) {
@@ -38,6 +38,27 @@ export function readModelConfig(env) {
   return { protocol, url, model: env.HUIXU_LLM_MODEL, key: env.HUIXU_LLM_API_KEY, keyHeader };
 }
 
+export function createPlatformModel(env, now = Date.now) {
+  const config = readModelConfig(env);
+  if (!config?.key || !minimaxOrigins.has(config.url.origin) || !/^MiniMax(?:[- ]|$)/i.test(config.model)) return null;
+  let until = 0;
+  let used = 0;
+  let active = 0;
+  return { ...config, async withQuota(send) {
+    if (active >= 4) return { error: '平台 MiniMax 正在处理其他请求，请稍后重试。' };
+    const time = now();
+    if (time >= until) {
+      until = time + 60000;
+      used = 0;
+    }
+    // 在模型请求层累计所有入口和多轮工具调用，共用同一份额度限制。
+    if (used >= 60) return { error: '平台 MiniMax 暂时达到调用频率上限，请稍后重试。' };
+    used += 1;
+    active += 1;
+    try { return await send(); } finally { active -= 1; }
+  } };
+}
+
 function modelError(status) {
   if (status === 401 || status === 403) return '模型服务拒绝鉴权，请检查会序的模型配置。';
   if (status === 402) return '模型服务返回额度不足，请检查服务商账户余额或订阅。';
@@ -51,7 +72,12 @@ function parseArguments(value) {
   try { return JSON.parse(value); } catch { return null; }
 }
 
-export async function requestModel(config, { system, messages, tools, final, signal }) {
+export function requestModel(config, input) {
+  if (config.withQuota) return config.withQuota(() => callModel(config, input));
+  return callModel(config, input);
+}
+
+async function callModel(config, { system, messages, tools, final, signal }) {
   const anthropic = config.protocol === 'anthropic';
   const body = anthropic ? {
     model: config.model, system, messages, max_tokens: 4096,

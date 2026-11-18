@@ -36,9 +36,9 @@ export function useWorkbenchSession() {
   }, [refresh]);
 
   async function signIn(values, mode) {
-    const { name, email, password, setupCode, signupCode } = values;
+    const { name, email, password, signupCode } = values;
     try {
-      if (mode === 'setup') await authRequest('/api/workbench-session', { name, email, password, setupCode });
+      if (mode === 'setup') await authRequest('/api/workbench-session', { name, email, password });
       if (mode === 'register') await authRequest('/api/workbench-session/register', { name, email, password, signupCode });
       const result = await authRequest('/api/auth/sign-in/email', { email, password });
       if (!result.user) throw new Error('登录状态暂不可用，请重新登录。');
@@ -82,7 +82,7 @@ function CredentialsForm({ session, refresh, signIn, mode, setMode }) {
     setProblem('');
     try {
       await signIn({ name: form.get('name')?.trim(), email: form.get('email').trim().toLowerCase(), password: form.get('password'),
-        setupCode: form.get('setupCode') ?? undefined, signupCode: form.get('signupCode') ?? undefined }, mode);
+        signupCode: form.get('signupCode') ?? undefined }, mode);
     } catch (error) {
       setProblem(error.message);
     } finally {
@@ -95,12 +95,15 @@ function CredentialsForm({ session, refresh, signIn, mode, setMode }) {
     <Notice tone="error" announce>{session.error}</Notice>
     <button type="button" className="button" onClick={refresh}>重新检查</button>
   </>;
+  if (session.ownerSetupPending) return <>
+    <Notice announce>工作台负责人账号尚未配置。请联系部署管理员，你也可以关闭窗口继续以访客身份浏览。</Notice>
+    <button type="button" className="button" onClick={refresh}>重新检查</button>
+  </>;
 
   return <form className="form-stack auth-form" onSubmit={submit} aria-busy={busy}>
     {creating && <>
       <p className="muted">{setup ? '首次使用，请设置工作台的负责人账号。' : '使用邀请码创建账号，系统会为你分配独立的活动工作区。'}</p>
       <label>姓名<input name="name" autoComplete="name" maxLength={60} required /></label>
-      {setup && session.setupCodeRequired && <label>负责人初始化码<input type="password" name="setupCode" autoComplete="off" required /></label>}
       {registering && <label>注册邀请码<input type="password" name="signupCode" autoComplete="off" required /></label>}
     </>}
     <label>邮箱<input name="email" type="email" autoComplete="username" maxLength={254} required /></label>
@@ -125,18 +128,29 @@ function CredentialsForm({ session, refresh, signIn, mode, setMode }) {
   </form>;
 }
 
-export function AccountDialog({ session, refresh, signIn, signOut, openTeam, close }) {
+export function AccountDialog({ session, refresh, signIn, signOut, workspace, openTeam, close }) {
   const [signingOut, setSigningOut] = useState(false);
   const [problem, setProblem] = useState('');
+  const [pendingSync, setPendingSync] = useState(null);
   const [preferredMode, setMode] = useState('login');
   const { user, setupRequired } = session;
   const mode = setupRequired ? 'setup' : session.signupEnabled ? preferredMode : 'login';
   let title = mode === 'login' ? '登录工作台' : '创建工作台账号';
   if (user) title = '账户与会话';
 
-  async function exitAccount() {
+  async function exitAccount(skipSync = false) {
     setSigningOut(true);
     setProblem('');
+    if (!skipSync) {
+      try {
+        await workspace.flush();
+        setPendingSync(null);
+      } catch (error) {
+        setPendingSync({ message: error.message, recoverable: workspace.keepPending() });
+        setSigningOut(false);
+        return;
+      }
+    }
     try {
       await signOut();
     } catch (error) {
@@ -152,9 +166,20 @@ export function AccountDialog({ session, refresh, signIn, signOut, openTeam, clo
         <div><strong>{user.name}</strong><p className="muted">{user.email}</p></div>
       </div>
       {problem && <Notice tone="error" announce>{problem}</Notice>}
+      {pendingSync && <>
+        <Notice tone="warning" announce>{pendingSync.message} {pendingSync.recoverable
+          ? '继续退出后，可以在此标签页重新登录原账号并恢复修改。关闭标签页前可导出副本。'
+          : '浏览器无法保留未同步的修改。退出前可导出副本。'}</Notice>
+        <div className="actions compact">
+          <button type="button" className="button small" disabled={signingOut} onClick={workspace.exportPending}>导出待同步修改</button>
+          <button type="button" className="button small" disabled={signingOut} onClick={() => exitAccount(true)}>
+            {pendingSync.recoverable ? '保留修改并退出' : '退出并放弃未同步修改'}
+          </button>
+        </div>
+      </>}
       <div className="actions compact">
         <button type="button" className="button" onClick={openTeam}><UsersRound size={18} aria-hidden="true" />活动团队</button>
-        <button type="button" className="button" disabled={signingOut} onClick={exitAccount}>
+        <button type="button" className="button" disabled={signingOut} onClick={() => exitAccount()}>
           <LogOut size={18} aria-hidden="true" />{signingOut ? '正在退出…' : '退出登录'}
         </button>
       </div>

@@ -155,7 +155,7 @@ export function Select({ label, name, options, value, defaultValue, onChange, co
       aria-controls={listId} aria-expanded={expanded} aria-haspopup="listbox" popoverTarget={listId} disabled={!selected}
       aria-activedescendant={expanded && choices[highlighted] ? listId + '-' + highlighted : undefined}
       onKeyDown={handleKey}>
-      <span>{selected?.label ?? '暂无选项'}</span><ChevronDown size={17} aria-hidden="true" />
+      <span>{selected?.triggerLabel ?? selected?.label ?? '暂无选项'}</span><ChevronDown size={17} aria-hidden="true" />
     </button>
     <ul ref={listbox} id={listId} className={'select-options' + (compact ? ' select-activities' : '')} role="listbox" aria-label={label} popover="auto"
       onBeforeToggle={event => {
@@ -163,11 +163,16 @@ export function Select({ label, name, options, value, defaultValue, onChange, co
         const index = initialHighlight.current ?? selectedIndex;
         initialHighlight.current = null;
         setHighlighted(index);
-        requestAnimationFrame(() => {
+        function placeOptions() {
           if (!listbox.current?.matches(':popover-open')) return;
           position();
           const activeIndex = Array.from(listbox.current.children).findIndex(option => option.dataset.highlighted === 'true');
           revealOption(activeIndex < 0 ? index : activeIndex);
+        }
+        requestAnimationFrame(() => {
+          const animations = trigger.current?.closest('dialog[open]')?.getAnimations() ?? [];
+          if (animations.length) void Promise.allSettled(animations.map(animation => animation.finished)).then(placeOptions);
+          else placeOptions();
         });
       }}
       onToggle={event => setExpanded(event.currentTarget.matches(':popover-open'))}>
