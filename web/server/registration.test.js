@@ -4,7 +4,7 @@ import { createServer } from 'node:http';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { test } from 'node:test';
-import { newEvent, participantCount } from '../src/model.js';
+import { exampleEvent, participantCount } from '../src/model.js';
 import { signupSnapshot } from '../src/registrationRules.js';
 import { registrationOwnerApi, registrationPublicApi } from './registrationApi.js';
 import { createRegistrationMail } from './registrationMail.js';
@@ -24,7 +24,7 @@ async function fixture(t) {
     return store;
   }
   const store = open();
-  const event = newEvent({ title: '测试论坛', type: '行业论坛', date: '2026-12-03', capacity: 3 }, eventId);
+  const event = exampleEvent({ title: '测试论坛', type: '行业论坛', date: '2026-12-03', capacity: 3 }, eventId);
   event.rooms[0].capacity = 1;
   event.version = 1;
   store.open(owner, signupSnapshot(event));

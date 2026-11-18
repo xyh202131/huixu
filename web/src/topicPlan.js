@@ -53,7 +53,8 @@ export function referencePlan(event) {
   const supplies = event.version
     ? [...new Set(event.rooms.flatMap(room => room.equipment))].map(name => ({ name })).slice(0, 8)
     : (source?.supplies ?? []).filter(row => row.name?.trim()).map(({ name }) => ({ name })).slice(0, 8);
-  return { title: event.title, version: event.version, slots: slots.slice(0, 8), tasks, roles, supplies };
+  const lessons = (event.teamLessons ?? []).slice(-8).map(({ condition, advice, version }) => ({ condition, advice, version }));
+  return { title: event.title, version: event.version, slots: slots.slice(0, 8), tasks, roles, supplies, lessons };
 }
 
 function templatePlan(topic, type, slots) {
@@ -103,7 +104,7 @@ export function createTopicEvent(input, reference, suggestions) {
     supplies: merge(reusedSupplies, suggestions?.supplies ?? template.supplies),
     tasks: merge(tasks, suggestedTasks),
     reference: reference && { title: reference.title, version: reference.version, durations: Math.min(slots.length, agenda.length),
-      tasks: tasks.length, roles: reusedRoles.length, supplies: reusedSupplies.length },
+      tasks: tasks.length, roles: reusedRoles.length, supplies: reusedSupplies.length, lessons: reference.lessons ?? [] },
   };
   return {
     ...newEvent({ title: input.topic, type, date, capacity }),

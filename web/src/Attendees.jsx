@@ -1,8 +1,9 @@
 import { useEffect, useId, useRef, useState } from 'react';
 import { ArrowLeft, ArrowRight, CalendarDays, Download, ExternalLink, MapPin, Plus, QrCode, Search, Send, Upload } from 'lucide-react';
-import { Badge, Empty, PageHead, Panel, Table, Tabs } from './components';
+import { Badge, Empty, FilterChips, PageHead, Panel, Table, Tabs } from './components';
 import { CheckControl, Dialog, Notice, Popconfirm } from './interactions';
 import { MarbleFlow } from './MarbleFlow';
+import { LoadingImage } from './LoadingImage';
 import { Select } from './Select';
 import { DesignMaterials } from './DesignMaterials';
 import { ImportRegistrations, RegistrationEditor, RegistrationMailRecords } from './RegistrationManagement';
@@ -23,6 +24,8 @@ export function Registration({ event, readOnly, registration, notify }) {
   const [importOpen, setImportOpen] = useState(false);
   const [busy, setBusy] = useState(false);
   const toolbar = useRef(null);
+  const statusControl = useRef(null);
+  const searchControl = useRef(null);
   const data = registration.current;
   const publicPath = data?.shared ? '#/public/' + data.publicId : '#/preview-event/' + event.id;
   const publicUrl = data?.shared ? new URL('/' + publicPath, data.publicOrigin || location.origin).href : '';
@@ -82,9 +85,15 @@ export function Registration({ event, readOnly, registration, notify }) {
         <button className="button" onClick={registration.refresh}>刷新名单</button>
       </div>}
       <div className="toolbar" ref={toolbar}>
-        <Tabs label="报名状态" items={statuses} value={filter} onChange={value => { setFilter(value); setPage(0); setProblem(''); }} />
-        <label className="search"><Search size={17} aria-hidden="true" /><input type="search" aria-label="搜索报名" placeholder="姓名、邮箱或凭证" value={query} onChange={e => { setQuery(e.target.value); setPage(0); setProblem(''); }} /></label>
+        <Tabs controlRef={statusControl} label="报名状态" items={statuses} value={filter} onChange={value => { setFilter(value); setPage(0); setProblem(''); }} />
+        <label className="search"><Search size={17} aria-hidden="true" /><input ref={searchControl} type="search" aria-label="搜索报名" placeholder="姓名、邮箱或凭证" value={query} onChange={e => { setQuery(e.target.value); setPage(0); setProblem(''); }} /></label>
       </div>
+      <FilterChips label="报名筛选条件" items={[
+        { id: 'status', label: '报名状态', value: filter !== '全部' ? filter : '', controlRef: statusControl,
+          remove: () => { setFilter('全部'); setPage(0); setProblem(''); } },
+        { id: 'query', label: '报名关键词', value: query.trim(), controlRef: searchControl,
+          remove: () => { setQuery(''); setPage(0); setProblem(''); } },
+      ]} />
       {problem && <Notice tone="warning" announce>{problem}</Notice>}
       {people.length ? <>
         <Table label="报名名单" pinRowHeader headers={['姓名', '分场', '审核', '出席', '个人凭证', ...(readOnly ? [] : ['操作'])]}>{people.slice(currentPage * pageSize, (currentPage + 1) * pageSize).map(person => <tr key={person.id}>
@@ -157,11 +166,9 @@ export function PublicEvent({ event, submit, preview = false }) {
         <div className="public-hero-media">
           <MarbleFlow variant="spectrum" />
           {event.type === '行业论坛'
-            ? <picture className="public-hero-photo">
-              <source type="image/webp" srcSet="/conference-640.webp 640w, /conference-1280.webp 1280w, /conference-2172.webp 2172w"
-                sizes="(max-width: 400px) 640px, (max-width: 760px) 1024px, 1280px" />
-              <img src="/conference.png" alt="" width={2172} height={724} fetchPriority="high" />
-            </picture>
+            ? <LoadingImage className="public-hero-photo" src="/conference.png" alt="论坛会场" width={2172} height={724} fetchPriority="high"
+              srcSet="/conference-640.webp 640w, /conference-1280.webp 1280w, /conference-2172.webp 2172w"
+              sizes="(max-width: 400px) 640px, (max-width: 760px) 1024px, 1280px" />
             : <div className="public-hero-placeholder"><span>{event.type}</span></div>}
         </div>
         <div className="public-hero-copy">

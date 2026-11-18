@@ -37,6 +37,23 @@ export function registrationOwnerApi(store, mail) {
       if (!eventId && method === 'GET') result = { events: store.list(owner) };
       else if (!eventId && method === 'POST') result = store.open(owner, await readJson(request, 180000));
       else if (!action && method === 'GET') result = store.get(owner, eventId);
+      else if (action === 'draft' && !id && method === 'GET') result = store.readDraft(owner, eventId);
+      else if (action === 'draft' && !id && method === 'PUT') result = store.saveDraft(owner, eventId, await readJson(request, 1024 * 1024));
+      else if (action === 'handoff' && !id && method === 'POST') {
+        const link = store.issueHandoff(owner, eventId);
+        result = { url: (mail.origin || 'http://' + request.headers.host) + '/#/tasks/' + link.token };
+      } else if (action === 'handoff' && !id && method === 'DELETE') result = store.revokeHandoff(owner, eventId);
+      else if (action === 'guests' && !id && method === 'POST') {
+        const link = store.guests.issue(owner, eventId, await readJson(request));
+        result = { url: (mail.origin || 'http://' + request.headers.host) + '/#/guest/' + link.token, expires: link.expires };
+      } else if (action === 'guests' && id && !operation && method === 'DELETE') {
+        result = store.guests.revoke(owner, eventId, id);
+      } else if (action === 'guests' && id && operation === 'file' && method === 'GET') {
+        const file = store.guests.download(owner, eventId, id);
+        response.writeHead(200, { 'Content-Type': 'application/octet-stream', 'Cache-Control': 'no-store',
+          'X-Content-Type-Options': 'nosniff', 'Content-Disposition': "attachment; filename*=UTF-8''" + encodeURIComponent(file.filename) });
+        return response.end(Buffer.from(file.attachment));
+      }
       else if (action === 'people' && (method === 'PATCH' && id && !operation || method === 'POST' && !id)) {
         result = store.savePerson(owner, eventId, id, await readJson(request));
       } else if ((action === 'settings' || action === 'schedule') && method === 'PATCH' && !id) {
@@ -93,9 +110,11 @@ export function registrationPublicApi(store, origin) {
     try {
       const [section, id, extra] = new URL(request.url, 'http://localhost').pathname.split('/').filter(Boolean);
       const token = request.headers['x-huixu-confirmation'];
-      if (extra || (section === 'events' && !id) || (section === 'attendance' && id) ||
-          !['events', 'attendance'].includes(section)) throw new RegistrationError(404, '活动链接不可用。');
+      if (extra || (section === 'events' ? !id : id) ||
+          !['events', 'attendance', 'guest', 'handoff'].includes(section)) throw new RegistrationError(404, '活动链接不可用。');
       if (request.method === 'GET') {
+        if (section === 'handoff') return sendJson(response, 200, store.taskHandoff(token));
+        if (section === 'guest') return sendJson(response, 200, store.guests.view(token));
         const result = section === 'events' ? store.publicEvent(id) : store.confirmation(token);
         return sendJson(response, 200, result);
       }
@@ -104,7 +123,17 @@ export function registrationPublicApi(store, origin) {
       if (!isLocalRequest(request) && (!origin || requestOrigin !== origin || request.headers.host !== new URL(origin).host)) {
         throw new RegistrationError(403, '请从活动确认页提交。');
       }
+      if (section === 'guest') {
+        store.guests.view(token);
+        let details;
+        try { details = JSON.parse(decodeURIComponent(request.headers['x-huixu-submission'])); } catch { throw new RegistrationError(400, '课件提交信息无效。'); }
+        if (!details || typeof details !== 'object') throw new RegistrationError(400, '课件提交信息无效。');
+        const bytes = await readBody(request, 16 * 1024 * 1024);
+        if (!bytes) throw new RegistrationError(413, '课件上限为 16 MB。');
+        return sendJson(response, 200, store.guests.submit(token, details, bytes));
+      }
       const input = await readJson(request, 4096);
+      if (section === 'handoff') return sendJson(response, 200, store.taskHandoff(token, input));
       if (section === 'attendance') return sendJson(response, 200, store.respond(token, input));
       const now = Date.now();
       for (const [key, entry] of attempts) if (entry.until <= now) attempts.delete(key);

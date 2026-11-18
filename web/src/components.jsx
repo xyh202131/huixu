@@ -1,5 +1,5 @@
 import { useEffect, useId, useRef, useState } from 'react';
-import { ChevronRight } from 'lucide-react';
+import { ChevronRight, X } from 'lucide-react';
 
 export function PageHead({ title, description, heading: Heading = 'h1', children }) {
   return <header className="page-head">
@@ -31,17 +31,33 @@ export function Empty({ children }) {
   return <p className="empty">{children}</p>;
 }
 
-export function Tabs({ items, value, onChange, label = '筛选' }) {
+export function Tabs({ items, value, onChange, label = '筛选', controlRef }) {
   const group = useId();
   const active = Math.max(0, items.indexOf(value));
   return <div className="tabs-scroll">
-    <div className="tabs" role="radiogroup" aria-label={label} style={{ '--segments': items.length, '--segment-index': active }}>
+    <div ref={controlRef} className="tabs" role="radiogroup" aria-label={label} style={{ '--segments': items.length, '--segment-index': active }}>
       {items.map(item => <label key={item}>
         <input className="sr-only" type="radio" name={group} checked={item === value} onChange={() => onChange(item)} />
         <span>{item}</span>
       </label>)}
     </div>
   </div>;
+}
+
+// 复用 rengong 活动档案的筛选标签与移除后焦点恢复。
+export function FilterChips({ items, label = '已启用的筛选条件' }) {
+  const active = items.filter(item => item.value);
+  if (!active.length) return null;
+  return <ul className="active-filters" role="list" aria-label={label}>{active.map(item => <li key={item.id}>
+    <button type="button" className="filter-chip" aria-label={'移除' + item.label + '筛选'} onClick={() => {
+      item.remove();
+      requestAnimationFrame(() => {
+        const control = item.controlRef?.current;
+        const target = control?.querySelector('input:checked, [role="combobox"], button') ?? control;
+        target?.focus({ preventScroll: true });
+      });
+    }}><span>{item.label}　<strong>{item.value}</strong></span><X size={14} aria-hidden="true" /></button>
+  </li>)}</ul>;
 }
 
 export function Table({ headers, children, label, pinRowHeader = false }) {

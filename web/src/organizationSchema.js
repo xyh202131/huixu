@@ -1,7 +1,8 @@
 export const planSections = {
   event: { label: '活动信息', fields: { title: '活动名称', date: '活动日期', venue: '活动地点', target: '预计人数', budget: '预算总额（元）' },
     required: ['title', 'date', 'venue', 'target', 'budget'] },
-  agenda: { label: '议程', fields: { name: '环节名称', date: '环节日期', start: '开始时间', end: '结束时间', room: '会场', host: '负责人或讲者' },
+  agenda: { label: '议程', fields: { name: '环节名称', date: '环节日期', start: '开始时间', end: '结束时间', room: '会场', host: '负责人或讲者',
+    expected: '分场预计人数', equipment: '环节所需设备' },
     required: ['start', 'end', 'room'] },
   roster: { label: '人员名单', fields: { name: '姓名', role: '角色', organization: '单位' }, required: ['role'] },
   venues: { label: '场地', fields: { name: '场地名称', capacity: '场地容量', address: '地址', equipment: '设备' }, required: ['capacity'] },

@@ -13,7 +13,8 @@ export function clock(value) {
 }
 
 export function roomLabel(room) {
-  return room ? room + ' 厅' : '待定';
+  if (!room) return '待定';
+  return /^[A-Za-z0-9]+$/.test(room) ? room + ' 厅' : room;
 }
 
 export function timeRange(item) {
@@ -76,6 +77,9 @@ export function checkCandidate(event, change, candidate, confirmedCount, personn
   const confirmed = confirmedCount ?? (event.attendees ? event.attendees.filter(person =>
     person.sessionId === session.id && reservesSeat(person)).length : current.confirmed ?? 0);
   const issues = roomIssues(room, change, current.equipment ?? [], confirmed);
+  if (Number(current.expected) > room.capacity && Number(current.expected) > confirmed) {
+    issues.push('分场预计 ' + current.expected + ' 人，超过会场容量 ' + room.capacity + ' 人');
+  }
   const duration = minutes(session.end) - minutes(session.start);
   if (minutes(candidate.end) - minutes(candidate.start) !== duration) issues.push('当天剩余时间不足，无法保留原环节时长');
   if (candidate.start < room.ready) issues.push('布置完成时间为 ' + room.ready);

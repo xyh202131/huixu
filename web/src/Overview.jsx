@@ -3,44 +3,51 @@ import { Badge, Empty, IconTile, LinkButton, Panel } from './components';
 import { MetricValue } from './interactions';
 import { MarbleFlow } from './MarbleFlow';
 import { dateLabel, liveAgenda, participantCount, roomLabel, timeRange } from './model';
+import { agendaHours, workItems } from './workItems';
 
-export function Overview({ event, readOnly, navigate, openImport }) {
-  const topicDraft = event.organizedPlan?.topicPlan && !event.version;
+export function Overview({ event, readOnly, navigate, openImport, openDraft, registration, activateChange }) {
+  const topicDraft = !!event.organizedPlan && !event.version;
   const completed = event.tasks.filter(task => task.done).length;
-  const openIssues = event.issues.filter(issue => !issue.resolved);
+  const { sources, changes } = workItems(event);
   const sessions = event.agenda.toSorted((a, b) => a.start.localeCompare(b.start));
   const { current, next } = liveAgenda(event, sessions);
+  let primary = ['查看议程', 'schedule'];
+  if (topicDraft) primary = event.executionPlan ? ['继续排程', 'schedule/execution'] : ['编辑活动方案', 'schedule/plan'];
+  else if (sources.length) primary = ['核对待确认资料', sources[0].route];
+  if (event.onsite) primary = ['打开现场总控', 'live'];
   const agendaRows = event.onsite
     ? [[current, '当前'], [next, '下一场']].filter(([item]) => item)
     : sessions.slice(0, 4).map(item => [item, '']);
   const stats = [
     [UsersRound, 'success', '确认报名', participantCount(event) + ' / ' + (topicDraft && !event.capacity ? '待定' : event.capacity), '已确认报名人数 / 目标人数', 'registration'],
     [CheckSquare, 'success', '筹备任务', completed + ' / ' + event.tasks.length, '已完成任务 / 总任务', 'prep'],
-    [FileText, 'amber', '资料待确认', openIssues.length, '需确认的资料或信息', 'sources'],
-    [ArrowRightLeft, 'purple', '待发布变更', Number(Boolean(event.change)), '待评估并发布的变更', 'change'],
+    [FileText, 'amber', '资料待确认', sources.length, '需确认的资料或信息', sources[0]?.route ?? 'sources'],
+    [ArrowRightLeft, 'purple', '待发布变更', changes.length, '待评估并发布的变更', 'change'],
   ];
   const pending = [
-    ...openIssues.map(issue => [CalendarX2, 'rose', issue.title, readOnly ? '查看两份资料的原文差异。' : '对照原文并确认采用的安排。', 'sources/issue/' + issue.id]),
-    ...(event.change ? [[ArrowRightLeft, 'success', '确认' + event.change.title + '方案', event.change.reason + '，查看候选方案及发布影响。', 'change']] : []),
-    ...(event.isSample && !event.replies.some(reply => reply.role === 'guest') ? [[FileText, 'blue', '嘉宾课件待提交', '查看嘉宾确认与课件提交情况。', 'external']] : []),
+    ...sources.map(issue => [CalendarX2, 'rose', issue.title, '对照原文并确认采用的安排。', issue.route]),
+    ...changes.map(change => [ArrowRightLeft, 'blue', change.title, change.reason || '查看候选方案及发布影响。', 'change', change]),
+    ...(event.id === 'forum' && !event.replies.some(reply => reply.role === 'guest') ? [[FileText, 'blue', '嘉宾课件待提交', '查看嘉宾确认与课件提交情况。', 'external']] : []),
   ];
   return <>
     <header className="overview-event">
       <MarbleFlow />
       <div className="overview-event-copy">
         <div className="overview-event-status"><CalendarDays size={16} aria-hidden="true" /><span>{event.type}</span>
-          {readOnly && <Badge tone="neutral">示例活动</Badge>}
+          {readOnly && event.isSample && <Badge tone="neutral">示例活动</Badge>}
           <Badge tone="success">{event.onsite ? '进行中' : '筹备中'}</Badge></div>
         <h1>{event.title}</h1>
         <div className="overview-event-meta">
-          <span><Clock3 size={16} aria-hidden="true" />{dateLabel(event.date)}{event.date && !topicDraft && ' 09:00–17:30'}</span>
+          <span><Clock3 size={16} aria-hidden="true" />{dateLabel(event.date)} · {agendaHours(sessions)}</span>
           <span><MapPin size={16} aria-hidden="true" />{event.venue}{event.isSample && ' · A / B / C 厅'}</span>
         </div>
       </div>
       <div className="overview-event-actions">
+        {!readOnly && <button className="button" disabled={!registration.current} onClick={openDraft}>
+          {event.draftDirty && registration.current?.workspaceRevision > (event.draftRevision ?? 0) ? '核对服务端新草稿' : '草稿交接'}</button>}
         {!readOnly && <button type="button" className="button" onClick={openImport}><UploadCloud size={17} aria-hidden="true" />导入活动项目</button>}
-        <button type="button" className="button" onClick={() => navigate('live')}><Monitor size={17} aria-hidden="true" />现场模式</button>
-        <button type="button" className="button primary" onClick={() => navigate(topicDraft ? 'schedule/plan' : 'schedule')}>{topicDraft ? '编辑活动方案' : '查看议程'}<ArrowRight size={16} aria-hidden="true" /></button>
+        {!event.onsite && <button type="button" className="button" onClick={() => navigate('live')}><Monitor size={17} aria-hidden="true" />现场模式</button>}
+        <button type="button" className="button primary" onClick={() => navigate(primary[1])}>{primary[0]}<ArrowRight size={16} aria-hidden="true" /></button>
       </div>
     </header>
     <div className="metrics overview-metrics">
@@ -58,11 +65,11 @@ export function Overview({ event, readOnly, navigate, openImport }) {
           <span className="tabular">{label === '当前' ? '开始于 ' + event.actual[item.id].started : timeRange(item)}</span>
           <div><strong>{item.title}</strong><small>{roomLabel(item.room)}</small></div>
           {label && <Badge tone={label === '当前' ? 'success' : 'neutral'}>{label}</Badge>}
-        </li>)}</ul> : <Empty>{event.onsite && sessions.length ? '当日环节已结束。' : '暂无议程。'}</Empty>}
+        </li>)}</ul> : <Empty>{event.executionPlan?.agenda.length ? <LinkButton onClick={() => navigate('schedule/execution')}>{event.executionPlan.agenda.length} 个环节已采用，查看待排程</LinkButton> : event.onsite && sessions.length ? '当日环节已结束。' : '暂无议程。'}</Empty>}
       </Panel>
       <Panel title="待处理" className="activity-pending" action={pending.length > 0 && <Badge tone="neutral">{pending.length} 项</Badge>}>
-        {pending.length ? <ul className="action-list">{pending.map(([Icon, tone, title, note, page]) => <li key={title}>
-          <button onClick={() => navigate(page)}>
+        {pending.length ? <ul className="action-list">{pending.map(([Icon, tone, title, note, page, change]) => <li key={change?.id ?? page}>
+          <button onClick={() => { if (change && change.id !== event.change?.id) activateChange(change); navigate(page); }}>
             <IconTile icon={Icon} tone={tone} />
             <span><strong>{title}</strong><small>{note}</small></span>
             <ChevronRight className="row-chevron" size={18} aria-hidden="true" />

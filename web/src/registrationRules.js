@@ -8,7 +8,9 @@ export function signupSnapshot(event) {
   return {
     id: event.id, title: event.title, type: event.type, date: event.date, venue: event.venue,
     version: event.version, capacity: event.capacity, formOpen: event.formOpen,
-    agenda: event.agenda.map(({ id, title, start, end, room, guest, equipment }) => ({ id, title, start, end, room, guest, equipment })),
+    agenda: event.agenda.map(({ id, title, start, end, room, guest, expected, equipment }) => ({
+      id, title, start, end, room, guest, equipment, ...(expected && { expected: Number(expected) }),
+    })),
     rooms: event.rooms.map(({ id, capacity, ready, equipment }) => ({ id, capacity, ready, equipment })),
   };
 }

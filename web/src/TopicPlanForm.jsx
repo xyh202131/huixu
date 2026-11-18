@@ -35,7 +35,7 @@ export function TopicPlanForm({ events, initialTopic, create, signedIn }) {
       const connection = await browserModel();
       const response = await fetch(signedIn ? '/api/topic-plan' : '/api/browser-topic-plan', {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ topic, type, audience: input.audience, slots: reference?.slots, connection: connection ?? undefined }), signal: controller.signal,
+        body: JSON.stringify({ topic, type, audience: input.audience, slots: reference?.slots, lessons: reference?.lessons, connection: connection ?? undefined }), signal: controller.signal,
       });
       if (response.status === 401) window.dispatchEvent(new Event(sessionExpired));
       const result = await response.json();
@@ -55,7 +55,7 @@ export function TopicPlanForm({ events, initialTopic, create, signedIn }) {
       placeholder="例如：社区可持续生活论坛" /></label>
     <Select label="参考活动（选填）" name="reference" options={[{ value: '', label: '不引用过往活动' },
       ...pastEvents.map(event => ({ value: event.id, label: event.title, detail: event.version ? '发布版 v' + event.version : '主题方案草稿' }))]} />
-    <p className="muted topic-plan-help">只填写主题即可。选用参考活动时，可借用环节时长、筹备任务和可用的岗位、物料条目。</p>
+    <p className="muted topic-plan-help">只填写主题即可。选用参考活动时会复用流程结构，并将负责人确认的团队经验交给本次起草模型参考。</p>
     <details className="import-review-detail topic-plan-details">
       <summary>补充已知信息（选填）</summary>
       <div className="form-grid">

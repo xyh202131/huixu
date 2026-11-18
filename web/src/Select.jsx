@@ -1,7 +1,7 @@
 import { useEffect, useId, useRef, useState } from 'react';
 import { Check, ChevronDown } from 'lucide-react';
 
-export function Select({ label, name, options, value, defaultValue, onChange, compact = false }) {
+export function Select({ label, name, options, value, defaultValue, onChange, compact = false, triggerRef }) {
   const id = useId();
   const trigger = useRef(null);
   const listbox = useRef(null);
@@ -151,7 +151,7 @@ export function Select({ label, name, options, value, defaultValue, onChange, co
   return <div className={'select-field' + (compact ? ' compact-select' : '')}>
     {!compact && <label htmlFor={id}>{label}</label>}
     {name && selected && <input type="hidden" name={name} value={selected.value} />}
-    <button ref={trigger} id={id} className="select-trigger" type="button" role="combobox" aria-label={label}
+    <button ref={node => { trigger.current = node; if (triggerRef) triggerRef.current = node; }} id={id} className="select-trigger" type="button" role="combobox" aria-label={label}
       aria-controls={listId} aria-expanded={expanded} aria-haspopup="listbox" popoverTarget={listId} disabled={!selected}
       aria-activedescendant={expanded && choices[highlighted] ? listId + '-' + highlighted : undefined}
       onKeyDown={handleKey}>

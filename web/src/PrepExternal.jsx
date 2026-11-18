@@ -1,19 +1,22 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { Link2, Package, Plus, UsersRound } from 'lucide-react';
 import { Badge, Empty, IconTile, PageHead, Panel, Table, Tabs } from './components';
 import { CheckControl, Dialog, MetricValue, Notice } from './interactions';
 import { Select } from './Select';
 import { externalRoles, money, roomLabel, timeRange, uid } from './model';
+import { GuestRequests } from './GuestCollaboration';
 
 function taskDeadline(date, offset) {
+  if (offset == null || offset === '') return '截止时间待定';
   if (!date) return '活动前 ' + offset + ' 天';
   const deadline = new Date(date + 'T12:00:00Z');
   deadline.setUTCDate(deadline.getUTCDate() - offset);
   return deadline.toISOString().slice(0, 10);
 }
 
-export function Preparation({ event, readOnly, update, notify }) {
+export function Preparation({ event, readOnly, update, notify, focusTaskId }) {
   const [tab, setTab] = useState('筹备任务');
+  useEffect(() => { if (focusTaskId) setTab('筹备任务'); }, [focusTaskId]);
   const [editing, setEditing] = useState(false);
   const completed = event.tasks.filter(task => task.done).length;
   return <>
@@ -22,8 +25,8 @@ export function Preparation({ event, readOnly, update, notify }) {
     </PageHead>
     <Tabs label="筹备视图" items={['筹备任务', '设备与物料', '预算与报价']} value={tab} onChange={setTab} />
     {tab === '筹备任务' && <Panel title="筹备任务" action={<Badge tone="success"><MetricValue value={completed} compact />&nbsp;/ {event.tasks.length} 已完成</Badge>}>
-      <Table headers={['任务', '负责人', '截止时间', '状态']}>{event.tasks.map(task => <tr key={task.id}>
-        <td>{task.name}</td><td>{task.owner}</td><td>{taskDeadline(event.date, task.offset)}</td>
+      <Table headers={['任务', '负责人', '截止时间', '状态']}>{event.tasks.map(task => <tr key={task.id} id={'activity-task-' + task.id}>
+        <td>{task.name}</td><td>{readOnly ? task.owner : <button className="link-button" onClick={() => setEditing(task)} aria-label={'分派或编辑' + task.name}>{task.owner || '待分配'}</button>}</td><td>{taskDeadline(event.date, task.offset)}</td>
         <td>{readOnly ? <Badge tone={task.done ? 'success' : 'neutral'}>{task.done ? '已完成' : '待处理'}</Badge> : <CheckControl label={task.name + '完成状态'} description={task.done ? '已完成' : '标记完成'} checked={task.done} onChange={done =>
           update(current => ({ ...current, tasks: current.tasks.map(item => item.id === task.id ? { ...item, done } : item) }))
         } />}</td>
@@ -39,17 +42,19 @@ export function Preparation({ event, readOnly, update, notify }) {
         <td>{quote.name}</td><td>{quote.supplier}</td><td>{money(quote.quote)}</td><td>{quote.actual ? money(quote.actual) : '待记录'}</td>
       </tr>)}</Table> : <Empty>供应商的演练报价将在这里显示。</Empty>}
     </Panel>}
-    {editing && <Dialog title="新建筹备任务" variant="drawer" close={() => setEditing(false)}><form className="form-stack" onSubmit={e => {
+    {editing && <Dialog title={editing.id ? '编辑筹备任务' : '新建筹备任务'} variant="drawer" close={() => setEditing(false)}><form className="form-stack" onSubmit={e => {
       e.preventDefault();
       const fields = new FormData(e.currentTarget);
-      const task = { id: uid(), name: fields.get('name').trim(), owner: fields.get('owner').trim() || '待分配', offset: Number(fields.get('offset')), done: false };
+      const task = { name: fields.get('name').trim(), owner: fields.get('owner').trim() || '待分配', offset: fields.get('offset') === '' ? null : Number(fields.get('offset')) };
       if (!task.name) return;
-      update(current => ({ ...current, tasks: [...current.tasks, task] }));
+      const newId = uid();
+      update(current => ({ ...current, tasks: editing.id ? current.tasks.map(item => item.id === editing.id ? { ...item, ...task } : item)
+        : [...current.tasks, { ...task, id: newId, done: false }] }));
       setEditing(false);
-      notify('筹备任务已添加');
+      notify('筹备任务已保存');
     }}>
-      <label>任务名称<input name="name" required maxLength="60" /></label><label>负责人<input name="owner" maxLength="30" /></label>
-      <label>活动前多少天截止<input name="offset" type="number" min="0" max="365" defaultValue="7" required /></label>
+      <label>任务名称<input name="name" required maxLength="160" defaultValue={editing.name ?? ''} /></label><label>负责人<input name="owner" maxLength="80" defaultValue={editing.owner === '待分配' ? '' : editing.owner ?? ''} /></label>
+      <label>活动前多少天截止<input name="offset" type="number" min="0" max="365" defaultValue={editing.id ? editing.offset ?? '' : 7} /></label>
       <button className="button primary">保存任务</button>
     </form></Dialog>}
   </>;
@@ -67,13 +72,14 @@ function replySummary(event, reply) {
   return label + session.title + ' · ' + timeRange(session) + ' · ' + roomLabel(session.room) + availability + details;
 }
 
-export function External({ event, readOnly }) {
+export function External({ event, readOnly, registration }) {
   return <>
-    <PageHead heading="h3" title="外部协作" description={readOnly ? '查看嘉宾、供应商与志愿者的协作事项。' : '查看嘉宾、供应商与志愿者的提交，打开本机表单演练。'} />
+    <PageHead heading="h3" title="外部协作" description={readOnly ? '查看嘉宾、供应商与志愿者的协作事项。' : '邀请嘉宾确认安排、收取课件，并查看各角色的提交记录。'} />
+    {!readOnly && <GuestRequests event={event} registration={registration} />}
     <div className="role-grid">{Object.entries(externalRoles).map(([role, label]) => <Panel key={role}>
       <div className="file-title"><IconTile icon={UsersRound} /><h2>{label}</h2></div>
       <p className="muted">{roleDescriptions[role]}</p>
-      {!readOnly && <a className="button" href={'#/external/' + event.id + '/' + role}><Link2 size={17} />打开{label}表单</a>}
+      {!readOnly && <a className="button" href={'#/external/' + event.id + '/' + role}><Link2 size={17} />打开{label}演练表单</a>}
     </Panel>)}</div>
     <Panel title="提交记录">
       {event.replies.length ? <Table headers={['角色', '姓名或机构', '提交内容', '状态']}>{event.replies.map(reply => <tr key={reply.id}>

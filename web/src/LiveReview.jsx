@@ -4,7 +4,7 @@ import { Badge, Empty, IconTile, PageHead, Panel, Table } from './components';
 import { Dialog, MetricValue, Notice } from './interactions';
 import { Select } from './Select';
 import { liveAgenda, materialText, money, participantCount, roomLabel, timeRange, uid } from './model';
-import { checkinPoint } from './scheduling';
+import { checkinPoint, sessionPeople } from './scheduling';
 import { RescueIncidentForm } from './RescueChange';
 import { rescueOperations } from './registrationRules';
 
@@ -16,8 +16,12 @@ export function Live({ event, readOnly, mobile, prepareRescue, registration }) {
   const [scanSession, setScanSession] = useState('');
   const [scanning, setScanning] = useState(false);
   const [recording, setRecording] = useState(false);
+  const [postPerson, setPostPerson] = useState('');
   const sessions = event.agenda.toSorted((a, b) => a.start.localeCompare(b.start));
   const { current, next } = liveAgenda(event, sessions);
+  const posts = mobile ? sessions.flatMap(session => sessionPeople(event, session)
+    .filter(person => person.role === '分场引导').map(person => ({ session, person }))) : [];
+  const post = posts.find(({ session, person }) => person.id === postPerson && !event.actual[session.id]?.ended);
   async function mark(session, action) {
     if (!registration.current || recording) return;
     if (action === 'started' && current) {
@@ -75,6 +79,12 @@ export function Live({ event, readOnly, mobile, prepareRescue, registration }) {
       <button className="button" aria-haspopup="dialog" onClick={() => setBoard(true)}><Monitor size={17} />现场大屏</button>
       {!readOnly && <button className="button primary" aria-haspopup="dialog" onClick={() => setReport(true)}><AlertTriangle size={17} />上报问题</button>}
     </PageHead>
+    {posts.length > 0 && <Panel title="我的现场岗位">
+      <Select label="查看岗位人员" value={postPerson} onChange={setPostPerson} options={[{ value: '', label: '选择岗位人员' },
+        ...new Map(posts.map(({ person }) => [person.id, { value: person.id, label: person.name }])).values()]} />
+      {post && <p>{post.session.start} · {checkinPoint(post.session)} · {post.person.role} · {post.session.title}</p>}
+      {postPerson && !post && <p className="muted">该人员本场岗位已全部结束。</p>}
+    </Panel>}
     <div className="split"><Panel title="现场进度" action={<Badge tone="success">{event.version ? '议程 v' + event.version : '计划草稿'}</Badge>}>
       <div className="running"><IconTile icon={ClipboardCheck} /><div><span>当前环节</span><strong>{current?.title ?? '暂无进行中的环节'}</strong>
         {current && <small>{roomLabel(current.room)} · 实际开始 {event.actual[current.id].started}</small>}</div></div>
@@ -134,6 +144,28 @@ export function Review({ event, readOnly, copy, update, notify }) {
       {!readOnly && <button className="button primary" onClick={copy}>复制为新活动</button>}
     </PageHead>
     <div className="metrics">{cards.map(([label, value]) => <div className="metric" key={label}><div><strong>{label}</strong><MetricValue value={value} /></div></div>)}</div>
+    <Panel title="可复用的团队经验">
+      <ul className="plain-list">{(event.teamLessons ?? []).map(lesson => <li key={lesson.id}>
+        <strong>{lesson.condition}</strong> · {lesson.advice} <Badge>来源 v{lesson.version}</Badge>
+        {!readOnly && <button type="button" className="link-button" onClick={() => update(current => ({
+          ...current, teamLessons: current.teamLessons.filter(row => row.id !== lesson.id),
+        }))}>取消复用</button>}
+      </li>)}</ul>
+      {!readOnly && <form className="form-stack" onSubmit={e => {
+        e.preventDefault();
+        const fields = new FormData(e.currentTarget);
+        const lesson = { id: uid(), condition: fields.get('condition').trim(), advice: fields.get('advice').trim(), version: event.version };
+        if (!lesson.condition || !lesson.advice) return;
+        update(current => ({ ...current, teamLessons: [...(current.teamLessons ?? []), lesson] }));
+        e.currentTarget.reset();
+        notify('已确认可供后续活动参考');
+      }}>
+        <label>适用条件<input name="condition" maxLength="100" required placeholder="例如：论坛跨楼转场" /></label>
+        <label>下次怎么做<input name="advice" maxLength="240" required placeholder="例如：两场之间预留 15 分钟" /></label>
+        <button className="button">确认作为团队经验</button>
+      </form>}
+      {readOnly && !event.teamLessons?.length && <Empty>暂无经负责人确认的经验。</Empty>}
+    </Panel>
     <Panel title="计划与实绩"><Table headers={['环节', '计划时间', '实际开始', '实际结束', '分场签到']}>{event.agenda.map(item => <tr key={item.id}>
       <td>{item.title}</td><td>{timeRange(item)}</td><td>{event.actual[item.id]?.started ?? '—'}</td><td>{event.actual[item.id]?.ended ?? '—'}</td>
       <td>{event.checkins.filter(checkin => checkin.sessionId === item.id).length} 人</td>

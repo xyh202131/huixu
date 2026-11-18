@@ -4,14 +4,15 @@ import { Badge, Empty, IconTile, LinkButton, PageHead, Panel, Table, Tabs } from
 import { Dialog, Notice } from './interactions';
 import { Select } from './Select';
 import { ActiveRescue, ReleasedRescue } from './RescueChange';
-import { rescueOperations } from './registrationRules';
+import { rescueOperations, signupSnapshot } from './registrationRules';
 import { ProjectMemory } from './ProjectMemory';
 import { ImportReview, OrganizedPlan } from './ImportReview';
 import { checkCandidate, makeChange, money, moveCandidate, participantCount, roomLabel, timeRange } from './model';
 import { changeReviewKey, describeChangeImpact } from './changeImpact';
 import { analyzeMove, checkinPoint, sameCandidate } from './scheduling';
+import { assessExecutionPlan } from './executionPlan';
 
-export function Sources({ event, readOnly, update, notify, navigate, importFiles, importRun, memoryEvidenceId, openImport, organize, organizationRun, sourceIssueId }) {
+export function Sources({ event, readOnly, mobile, update, notify, navigate, importFiles, importRun, memoryEvidenceId, closeSource, sourceReturnLabel, openImport, organize, organizationRun, sourceIssueId }) {
   const [selectedIssue, setSelectedIssue] = useState(sourceIssueId);
   const [editingSource, setEditingSource] = useState(null);
   useEffect(() => { if (sourceIssueId) setSelectedIssue(sourceIssueId); }, [sourceIssueId]);
@@ -58,8 +59,8 @@ export function Sources({ event, readOnly, update, notify, navigate, importFiles
         </div>}
       </Panel>
     </div>}
-    {!readOnly && <ProjectMemory eventId={event.id} importFiles={importFiles} importRun={importRun} evidenceId={memoryEvidenceId}
-      onCloseEvidence={() => navigate('sources', { preserveScroll: true })} onAccessChange={allowed => organize(event.id, allowed)}>
+    {!readOnly && <ProjectMemory eventId={event.id} mobile={mobile} importFiles={importFiles} importRun={importRun} evidenceId={memoryEvidenceId}
+      onCloseEvidence={closeSource} returnLabel={sourceReturnLabel} onAccessChange={allowed => organize(event.id, allowed)}>
       <ImportReview {...{ event, update, notify, navigate, organize, organizationRun, importRun }} />
     </ProjectMemory>}
     {event.files.length > 0 && <details className="activity-file-history">
@@ -98,11 +99,29 @@ export function Sources({ event, readOnly, update, notify, navigate, importFiles
   </>;
 }
 
-export function Schedule({ event, readOnly, openChange, update, notify, navigate }) {
+export function Schedule({ event, readOnly, openChange, update, notify, navigate, registration }) {
   const [room, setRoom] = useState('全部');
   const [editing, setEditing] = useState(null);
   const [problem, setProblem] = useState('');
   const [dragRoom, setDragRoom] = useState('');
+  const [releaseOpen, setReleaseOpen] = useState(null);
+  const [publishing, setPublishing] = useState(false);
+  const staged = !event.version && event.executionPlan;
+  const assessment = useMemo(() => staged && assessExecutionPlan(event), [staged, event]);
+  const schedule = assessment && signupSnapshot({ ...event, ...assessment, version: 1 });
+  const outdated = releaseOpen && (releaseOpen.revision !== registration.current?.revision ||
+    JSON.stringify(releaseOpen.schedule) !== JSON.stringify(schedule));
+  async function releaseFirstSchedule() {
+    if (publishing || !releaseOpen || outdated || !assessment || assessment.issues.length) return;
+    setPublishing(true);
+    try {
+      const result = await registration.change('/schedule', 'PATCH', { revision: releaseOpen.revision, event: releaseOpen.schedule });
+      update(current => ({ ...current, ...result.event, executionPlan: null }));
+      setReleaseOpen(false);
+      notify('执行议程已发布为 v1');
+    } catch (error) { setProblem(error.message); }
+    finally { setPublishing(false); }
+  }
   const agenda = event.agenda.toSorted((a, b) => a.start.localeCompare(b.start));
   const sessions = agenda.filter(item => room === '全部' || roomLabel(item.room) === room);
   function createProposal(item, target, start) {
@@ -124,9 +143,25 @@ export function Schedule({ event, readOnly, openChange, update, notify, navigate
       <Badge tone={event.version ? 'success' : 'neutral'}>{event.version ? '发布版本 v' + event.version : '计划草稿'}</Badge>
     </PageHead>
     {event.organizedPlan && <div className="activity-anchor" id="activity-organized-plan">
-      <OrganizedPlan key={event.organizedPlan.id} plan={event.organizedPlan} update={update} notify={notify} navigate={navigate} />
+      <OrganizedPlan key={event.organizedPlan.id} event={event} plan={event.organizedPlan} update={update} notify={notify} navigate={navigate} />
     </div>}
-    {event.organizedPlan?.topicPlan && !agenda.length ? <Notice>当前为方案草稿。具体时间和会场留待确认后排程。</Notice> : <>
+    {staged && <div className="activity-anchor" id="activity-execution"><Panel title="执行计划 · 待排程" action={<Badge>{staged.agenda.length} 个环节</Badge>}>
+      <ul className="overview-agenda-list">{staged.agenda.map(row => <li key={row.id}><div><strong>{row.title}</strong>
+        <small>{row.duration && row.duration + ' 分钟 · '}{row.start && row.end ? timeRange(row) : '时段待定'} · {roomLabel(row.room)}</small></div></li>)}</ul>
+      {assessment.issues.length > 0 && <details><summary>发布前需处理 {assessment.issues.length} 项</summary><ul>{assessment.issues.map(issue => <li key={issue}>{issue}</li>)}</ul></details>}
+      <div className="actions"><button className="button" onClick={() => navigate('schedule/plan')}>编辑方案并重新采用</button>
+        {!readOnly && <button className="button primary" disabled={!!assessment.issues.length || !registration.current} onClick={() => {
+          setProblem(''); setReleaseOpen({ revision: registration.current.revision, schedule });
+        }}>核对并发布议程</button>}</div>
+    </Panel></div>}
+    {releaseOpen && assessment && <Dialog title="发布执行议程 v1" close={() => { if (!publishing) setReleaseOpen(false); }}>
+      <p>{event.title} · {event.date} · {assessment.agenda.length} 个环节</p>
+      <ul>{assessment.agenda.map(row => <li key={row.id}>{timeRange(row)} · {row.title} · {roomLabel(row.room)}</li>)}</ul>
+      {problem && <Notice tone="warning" announce>{problem}</Notice>}
+      {outdated && <Notice tone="warning">活动或报名已更新，请关闭并重新核对发布范围。</Notice>}
+      <button className="button primary" disabled={publishing || outdated || !!assessment.issues.length} onClick={releaseFirstSchedule}>{publishing ? '正在发布…' : '确认发布 v1'}</button>
+    </Dialog>}
+    {event.organizedPlan && !agenda.length ? (!staged && <Notice>保存方案后可采用为执行计划，未确定时段的环节会进入待排程。</Notice>) : <>
     <Panel title="会场安排">
       <div className="room-grid">{event.rooms.map(item => {
         const label = roomLabel(item.id);

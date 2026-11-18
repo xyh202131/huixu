@@ -2,8 +2,9 @@ import { sessionExpired } from './authClient';
 import { sessionPeople } from './scheduling';
 import { reservesSeat } from './registrationRules';
 import { browserModel } from './browserModels';
+import { workItems } from './workItems';
 
-export async function askModel(question, event, signal, signedIn = false) {
+export async function askModel(question, event, signal, signedIn = false, history = []) {
   const connection = await browserModel();
   if (!signedIn && !connection) return { code: 'MODEL_NOT_CONFIGURED', error: '请先在右上角模型设置中填写并保存 API Key，即可开始使用 Agent。' };
   const registrations = new Map();
@@ -16,16 +17,20 @@ export async function askModel(question, event, signal, signedIn = false) {
   }
   const aliases = new Map();
   const agenda = event.agenda.map(session => {
-    const { id, title, start, end, room, equipment } = session;
+    const { id, title, start, end, room, expected, equipment } = session;
     const people = sessionPeople(event, session).map(person => {
       if (!aliases.has(person.id)) aliases.set(person.id, `p${aliases.size + 1}`);
       return { id: aliases.get(person.id), role: person.role, availability: person.availability };
     });
-    return { id, title, start, end, room, people, equipment, ...registrations.get(id),
+    return { id, title, start, end, room, expected, people, equipment, ...registrations.get(id),
       checkedIn: event.checkins.filter(item => item.sessionId === id).length, started: event.actual[id]?.started, ended: event.actual[id]?.ended };
   });
+  const pending = workItems(event);
   const snapshot = {
     id: event.id, title: event.title, date: event.date, venue: event.venue, type: event.type, version: event.version,
+    choices: signedIn ? Object.fromEntries(Object.entries(event.organizationChoices ?? {}).filter(([key, choice]) =>
+      choice?.value && (!choice.status || choice.status === '已确认') && !key.startsWith('["roster",')).slice(0, 120)
+      .map(([key, { value, evidence }]) => [key, { value, evidence }])) : undefined,
     agenda,
     rooms: event.rooms.map(({ id, capacity, ready, equipment }) => ({ id, capacity, ready, equipment })),
     change: event.change && { sessionId: event.change.sessionId, closedRoom: event.change.closedRoom, earliest: event.change.earliest },
@@ -38,10 +43,13 @@ export async function askModel(question, event, signal, signedIn = false) {
       waitlisted: event.attendees.filter(person => person.status === '候补').length,
       checkedIn: event.checkins.filter(item => !item.sessionId).length,
       pendingChange: event.change?.title, lastPublished: event.history[0]?.title,
+      changeCount: pending.changes.length, sourceCount: pending.sources.length,
+      stagedSessions: (event.executionPlan?.agenda ?? []).slice(0, 24).map(row => row.title),
+      lessons: (event.organizedPlan?.reference?.lessons ?? []).map(item => item.condition + ' · ' + item.advice),
     },
   };
   const response = await fetch(signedIn ? '/api/agent' : '/api/browser-agent', {
-    method: 'POST', signal, headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ question, event: snapshot, connection: connection ?? undefined }),
+    method: 'POST', signal, headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ question, event: snapshot, history, connection: connection ?? undefined }),
   });
   if (response.status === 401) window.dispatchEvent(new Event(sessionExpired));
   if (!response.headers.get('content-type')?.includes('application/json')) throw new Error('会序模型接口不可用，请通过工作台开发服务启动。');

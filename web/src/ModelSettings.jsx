@@ -159,7 +159,7 @@ function ModelSettingsForm({ purpose }) {
 export function ModelSettings({ close }) {
   const [label, setLabel] = useState(chatLabel);
   const purpose = label === organizationLabel ? 'organization' : 'chat';
-  return <Dialog title="模型设置" fullOnMobile close={close}>
+  return <Dialog title="模型设置" className="model-settings-dialog" fullOnMobile close={close}>
     <Tabs label="模型用途" items={[chatLabel, organizationLabel]} value={label} onChange={setLabel} />
     <ModelSettingsForm key={purpose} purpose={purpose} />
   </Dialog>;

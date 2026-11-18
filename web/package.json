@@ -7,7 +7,7 @@
     "dev": "vite --host 127.0.0.1",
     "build": "vite build",
     "preview": "vite preview --host 127.0.0.1",
-    "test": "node --test server/auth.test.js server/modelSettings.test.js server/browserModels.test.js server/sourceReview.test.js server/scheduling.test.js server/topicPlan.test.js server/registration.test.js server/rescue.test.js"
+    "test": "node --test server/auth.test.js server/modelSettings.test.js server/browserModels.test.js server/sourceReview.test.js server/scheduling.test.js server/topicPlan.test.js server/registration.test.js server/rescue.test.js server/workspaceFlow.test.js"
   },
   "dependencies": {
     "better-auth": "1.7.21",

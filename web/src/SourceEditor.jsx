@@ -74,7 +74,7 @@ export function SourceEditor({ eventId, source, problem, updated, replace, close
     }
   }
 
-  return <Dialog title={'管理资料 · ' + source.name} variant="drawer" fullOnMobile close={close}>
+  return <Dialog title={'管理资料 · ' + source.name} className="source-editor-dialog" variant="drawer" fullOnMobile close={close}>
     <p className="muted">文件 v{source.revision} · {current.state} · {current.chunkCount} 个片段</p>
     {problem && <Notice tone="error" announce>{problem}</Notice>}
     {feedback && <Notice tone={feedback.tone} announce>{feedback.text}</Notice>}

@@ -4,6 +4,10 @@ import { signupSnapshot } from './registrationRules.js';
 
 const ownerBase = '/api/registration/events';
 
+export function localOnlyLink(value) {
+  return ['localhost', '127.0.0.1', '[::1]'].includes(new URL(value).hostname);
+}
+
 async function registrationRequest(base, path, method = 'GET', input, signal, token) {
   const headers = {};
   if (token) headers['X-Huixu-Confirmation'] = token;
@@ -85,7 +89,9 @@ export function useRegistrationWorkspace(enabled, event) {
   function accept(result) {
     setData(existing => {
       const id = result.event.id;
-      if (existing[id]?.revision >= result.revision) return existing;
+      const previous = existing[id];
+      if (previous && (previous.revision > result.revision ||
+        previous.revision === result.revision && (previous.workspaceRevision ?? 0) >= (result.workspaceRevision ?? 0))) return existing;
       return { ...existing, [id]: result };
     });
   }
